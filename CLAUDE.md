@@ -39,7 +39,7 @@ python -m bc3manager.web file.bc3    # Start with file pre-loaded + autosave
 
 ## Testing
 
-Run `python tests/test_basico.py` after any change to model.py, lector.py or escritor.py. There's a sample file `ejemplo_son_font.bc3` for testing. Expected PEM total: 4.815,45 €.
+Run `python tests/test_basico.py` after any change to model.py, lector.py or escritor.py. There's a sample file `ejemplo_son_font.bc3` for testing (regenerable with `python scripts/gen_ejemplo.py`). Expected PEM total: 4.523,25 €.
 
 ## What NOT to do
 

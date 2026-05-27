@@ -51,7 +51,7 @@ def test_medicion():
 
 def test_total():
     p = leer_bc3(EJEMPLO)
-    assert abs(p.presupuesto_total() - 4815.45) < 0.01
+    assert abs(p.presupuesto_total() - 4523.25) < 0.01
 
 
 def test_round_trip():

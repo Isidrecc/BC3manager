@@ -204,20 +204,47 @@ button{cursor:pointer;font-family:inherit}
 .upload-box{border:2px dashed var(--border);border-radius:var(--radius-lg);padding:64px 80px;text-align:center;transition:all .2s;cursor:pointer}
 .upload-box:hover,.upload-box.drag{border-color:var(--accent);background:var(--accent-soft)}
 .upload-box h2{font-size:20px;font-weight:600;margin-bottom:8px}.upload-box p{color:var(--text-dim);font-size:14px;margin-bottom:24px}
-.main{display:flex;height:calc(100vh - 56px);overflow:hidden}
-.tree-panel{width:420px;min-width:320px;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
-.detail-panel{flex:1;overflow-y:auto;padding:24px 32px}
-.tree-header{padding:12px 16px;border-bottom:1px solid var(--border);font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;font-weight:600;background:var(--bg-card)}
-.tree-scroll{overflow-y:auto;flex:1}
-.tree-node{border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s}.tree-node:hover{background:var(--bg-hover)}.tree-node.active{background:var(--bg-active);border-left:3px solid var(--accent)}
-.tree-row{display:flex;align-items:flex-start;padding:10px 16px;gap:10px}
-.tree-toggle{width:18px;height:18px;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:11px;flex-shrink:0;margin-top:2px;transition:transform .15s;user-select:none}.tree-toggle.open{transform:rotate(90deg)}.tree-toggle.leaf{visibility:hidden}
-.tree-info{flex:1;min-width:0}.tree-code{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-muted);margin-bottom:2px}.tree-name{font-size:13px;font-weight:500;line-height:1.3}
-.tree-amount{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--green);font-weight:500;white-space:nowrap;margin-top:2px;text-align:right;flex-shrink:0}
-.tree-children{display:none}.tree-children.open{display:block}
-.level-0 .tree-row{padding-left:16px}.level-1 .tree-row{padding-left:34px}.level-2 .tree-row{padding-left:52px}.level-3 .tree-row{padding-left:70px}
-.tree-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:2px 6px;border-radius:4px;flex-shrink:0;margin-top:2px}
-.badge-cap{background:var(--accent-soft);color:var(--accent)}.badge-part{background:var(--green-soft);color:var(--green)}
+.main{display:flex;height:calc(100vh - 56px - 49px);overflow:hidden}
+.tree-panel{width:60%;min-width:520px;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+.detail-panel{flex:1;overflow-y:auto;padding:20px 24px;min-width:380px}
+.tree-scroll{overflow:auto;flex:1}
+/* Tabla del árbol */
+.ttable{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+.ttable thead{position:sticky;top:0;z-index:5}
+.ttable thead th{background:var(--bg-card);color:var(--text-dim);text-align:left;padding:9px 8px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border);user-select:none}
+.ttable thead th.num{text-align:right}
+.ttable tbody td{padding:5px 8px;border-bottom:1px solid var(--border);vertical-align:middle;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ttable tbody tr{cursor:pointer;transition:background .08s}
+.ttable tbody tr:hover td{background:var(--bg-hover)}
+.ttable tbody tr.active td{background:var(--bg-active);box-shadow:inset 3px 0 0 var(--accent)}
+.ttable .num{text-align:right;font-family:'JetBrains Mono',monospace;font-size:11px;font-variant-numeric:tabular-nums}
+.ttable .cod{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim)}
+.ttable .imp{color:var(--green);font-weight:500}
+/* Columnas (anchos) */
+.col-cod{width:130px}
+.col-ud{width:60px}
+.col-cant{width:90px}
+.col-imp{width:110px}
+.col-act{width:74px}
+/* Fila por tipo */
+.ttable tr.row-cap td{background:var(--bg-card)}
+.ttable tr.row-cap td.col-resumen{font-weight:600}
+.ttable tr.row-cap:hover td{background:var(--bg-hover)}
+.ttable tr.row-cap.active td{background:var(--bg-active)}
+/* Toggle de despliegue */
+.tt-toggle{display:inline-flex;width:14px;height:14px;align-items:center;justify-content:center;color:var(--text-muted);font-size:10px;margin-right:4px;transition:transform .15s;user-select:none;vertical-align:middle}
+.tt-toggle.open{transform:rotate(90deg)}
+.tt-toggle.leaf{visibility:hidden}
+.tt-indent{display:inline-block;vertical-align:middle}
+.tt-badge{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.4px;padding:1px 5px;border-radius:3px;margin-right:6px;vertical-align:middle}
+.badge-cap{background:var(--accent-soft);color:var(--accent)}
+.badge-part{background:var(--green-soft);color:var(--green)}
+/* Botones de acción por fila (aparecen al hover) */
+.row-actions{display:inline-flex;gap:3px;opacity:0;transition:opacity .1s;justify-content:flex-end;width:100%}
+.ttable tbody tr:hover .row-actions,.ttable tbody tr.active .row-actions{opacity:1}
+.row-actions button{width:22px;height:22px;padding:0;border-radius:4px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-dim);font-size:13px;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:all .1s}
+.row-actions button:hover{color:var(--text);background:var(--bg-hover);border-color:var(--border-light)}
+.row-actions button.danger:hover{color:var(--red);border-color:var(--red)}
 .detail-empty{display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:14px}
 .detail-header{margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)}
 .detail-code{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);margin-bottom:4px}
@@ -270,8 +297,21 @@ button{cursor:pointer;font-family:inherit}
 </div></header>
 <div id="uploadScreen" class="upload-screen"><div class="upload-box" id="uploadBox" onclick="document.getElementById('fileInput').click()" ondragover="event.preventDefault();this.classList.add('drag')" ondragleave="this.classList.remove('drag')" ondrop="event.preventDefault();this.classList.remove('drag');handleDrop(event)"><h2>Abre un archivo BC3</h2><p>Arrastra aquí o haz clic</p><button class="btn btn-accent">Seleccionar archivo</button></div></div>
 <div id="mainApp" style="display:none"><div class="stats-bar" id="statsBar"></div>
-<div class="main"><div class="tree-panel"><div class="tree-header">Estructura del presupuesto</div><div class="tree-scroll" id="treeContainer"></div></div>
-<div class="detail-panel" id="detailPanel"><div class="detail-empty">Selecciona un capítulo o partida</div></div></div></div>
+<div class="main">
+  <div class="tree-panel">
+    <div class="tree-scroll" id="treeContainer">
+      <table class="ttable"><thead><tr>
+        <th class="col-cod">Código</th>
+        <th class="col-resumen">Descripción</th>
+        <th class="col-ud">Ud</th>
+        <th class="num col-cant">Cantidad</th>
+        <th class="num col-imp">Importe</th>
+        <th class="col-act"></th>
+      </tr></thead><tbody id="treeBody"></tbody></table>
+    </div>
+  </div>
+  <div class="detail-panel" id="detailPanel"><div class="detail-empty">Selecciona una partida</div></div>
+</div></div>
 <div id="loadingOverlay" style="display:none;position:fixed;inset:0;background:rgba(15,17,23,.85);z-index:200"><div class="loading" style="height:100%"><div class="spinner"></div><span>Leyendo BC3...</span></div></div>
 
 <script>
@@ -309,8 +349,10 @@ function renderApp(){
   document.getElementById('mainApp').style.display='';
   document.getElementById('headerActions').style.display='';
   renderStats();renderTree();
-  document.getElementById('detailPanel').innerHTML='<div class="detail-empty">Selecciona un capítulo o partida</div>';
+  document.getElementById('detailPanel').innerHTML='<div class="detail-empty">Selecciona una partida</div>';
 }
+// Estado de plegado del árbol: codigos abiertos
+let openCaps=new Set();
 function renderStats(){
   const i=fileInfo;
   document.getElementById('statsBar').innerHTML=`
@@ -322,52 +364,93 @@ function renderStats(){
     <div class="stat"><span class="stat-label">PEM</span><span class="stat-value total">${esc(i.total_fmt)} €</span></div>`;
 }
 function renderTree(){
-  const c=document.getElementById('treeContainer');c.innerHTML='';
-  treeData.forEach(n=>c.appendChild(mkTreeNode(n,0,'')));
+  const tb=document.getElementById('treeBody');tb.innerHTML='';
+  treeData.forEach(n=>appendTreeRows(tb,n,0,''));
 }
+// Inserta una fila por nodo (capítulo o partida) y, si está abierto, sus hijos.
+function appendTreeRows(tbody,nodo,level,parentCod){
+  tbody.appendChild(mkTreeRow(nodo,level,parentCod));
+  const isCap=nodo.tipo==='capitulo';
+  if(isCap && nodo.hijos && nodo.hijos.length>0 && openCaps.has(nodo.codigo)){
+    nodo.hijos.forEach(h=>appendTreeRows(tbody,h,level+1,nodo.codigo));
+  }
+}
+// Crea una fila <tr> con sus celdas y handlers.
+function mkTreeRow(nodo,level,parentCod){
+  const tr=document.createElement('tr');
+  const isCap=nodo.tipo==='capitulo';
+  const hasKids=isCap && nodo.hijos && nodo.hijos.length>0;
+  const isOpen=openCaps.has(nodo.codigo);
+  tr.className='row-'+(isCap?'cap':'part');
+  if(curNode && curNode.codigo===nodo.codigo && curParent===parentCod) tr.classList.add('active');
+  tr._nodoData=nodo;tr._parentCod=parentCod;
 
-// ---- Tree node ----
-function mkTreeNode(nodo,level,parentCod){
-  const div=document.createElement('div');div.className=`tree-node level-${Math.min(level,3)}`;
-  const hasKids=nodo.hijos&&nodo.hijos.length>0;const isCap=nodo.tipo==='capitulo';
-  div.innerHTML=`<div class="tree-row"><span class="tree-toggle ${hasKids?'':'leaf'}">▶</span>
-    <span class="tree-badge ${isCap?'badge-cap':'badge-part'}">${isCap?'Cap':'Part'}</span>
-    <div class="tree-info"><div class="tree-code">${esc(nodo.codigo)} ${nodo.unidad?'('+esc(nodo.unidad)+')':''}</div>
-    <div class="tree-name">${esc(nodo.resumen)}</div></div>
-    <div class="tree-amount">${esc(nodo.importe_fmt)} €</div></div>`;
-  const row=div.querySelector('.tree-row');
-  row.addEventListener('click',()=>{
-    document.querySelectorAll('.tree-node.active').forEach(n=>n.classList.remove('active'));
-    div.classList.add('active');
-    const tgl=div.querySelector('.tree-toggle');const ch=div.querySelector('.tree-children');
-    if(ch&&!ch.classList.contains('open')){ch.classList.add('open');if(tgl)tgl.classList.add('open')}
-    curNode=nodo;curParent=parentCod;renderDetail(nodo)
-  });
-  row.addEventListener('dblclick',()=>{
-    if(isCap&&hasKids){
-      // find first partida child and select it
-      const firstPart=nodo.hijos.find(h=>h.tipo==='partida');
-      if(firstPart){curNode=firstPart;curParent=nodo.codigo;renderDetail(firstPart);
-        document.querySelectorAll('.tree-node.active').forEach(n=>n.classList.remove('active'));
-        // expand and select in tree
-        const ch=div.querySelector('.tree-children');const tgl=div.querySelector('.tree-toggle');
-        if(ch&&!ch.classList.contains('open')){ch.classList.add('open');if(tgl)tgl.classList.add('open')}
-        const kids=div.querySelectorAll(':scope > .tree-children > .tree-node');
-        kids.forEach(k=>{if(k._nodoData===firstPart)k.classList.add('active')})
-      }
+  // Sangría (16px por nivel) + toggle ▶
+  const pad=level*16;
+  const toggleHtml=`<span class="tt-toggle ${hasKids?'':'leaf'}${isOpen?' open':''}" data-act="toggle">▶</span>`;
+  const indentHtml=`<span class="tt-indent" style="width:${pad}px"></span>`;
+  const badgeHtml=`<span class="tt-badge ${isCap?'badge-cap':'badge-part'}">${isCap?'Cap':'Part'}</span>`;
+
+  // Cantidad: capítulo -> "1" no editable; partida con líneas -> total no editable; partida sin líneas -> editable
+  const numLineas=nodo.lineas_medicion?nodo.lineas_medicion.length:0;
+  let cantHtml;
+  if(isCap){
+    cantHtml=`<span style="color:var(--text-muted)">1</span>`;
+  }else if(numLineas>0){
+    cantHtml=`<span title="Suma de líneas de medición">${esc(nodo.medicion_fmt)}</span>`;
+  }else{
+    cantHtml=ec(nodo.medicion_fmt||'0',true,v=>setCantidadSimple(nodo.codigo,parentCod,parseNum(v)),true);
+  }
+
+  // Acciones contextuales por fila
+  let actsHtml='<div class="row-actions">';
+  if(isCap){
+    actsHtml+=`<button title="+ Subcapítulo" data-act="addcap">＋</button>`;
+    actsHtml+=`<button title="+ Partida" data-act="addpart">▦</button>`;
+  }
+  if(parentCod) actsHtml+=`<button class="danger" title="Eliminar" data-act="del">×</button>`;
+  actsHtml+='</div>';
+
+  tr.innerHTML=
+    `<td class="col-cod cod">${indentHtml}${toggleHtml}${ec(nodo.codigo,true,v=>api({accion:'codigo',codigo_viejo:nodo.codigo,codigo_nuevo:v.trim()}).then(refresh),false)}</td>`+
+    `<td class="col-resumen">${badgeHtml}${ec(nodo.resumen,true,v=>api({accion:'resumen',codigo:nodo.codigo,valor:v}).then(refresh),false)}</td>`+
+    `<td class="col-ud">${ec(nodo.unidad||'',true,v=>api({accion:'unidad',codigo:nodo.codigo,valor:v}).then(refresh),false)}</td>`+
+    `<td class="num col-cant">${cantHtml}</td>`+
+    `<td class="num col-imp imp">${esc(nodo.importe_fmt)} €</td>`+
+    `<td class="col-act">${actsHtml}</td>`;
+
+  // Clic en celda: selecciona la fila (si es partida abre el detalle); el toggle se gestiona aparte
+  tr.addEventListener('click',e=>{
+    const t=e.target;
+    if(t.classList && t.classList.contains('ecell')) return;       // edición inline
+    const act=t.getAttribute && t.getAttribute('data-act');
+    if(act==='toggle'){ toggleCap(nodo.codigo); return; }
+    if(act==='addcap'){ e.stopPropagation(); addCapitulo(nodo.codigo); return; }
+    if(act==='addpart'){ e.stopPropagation(); addPartida(nodo.codigo); return; }
+    if(act==='del'){ e.stopPropagation(); eliminarConcepto(nodo.codigo,parentCod); return; }
+    // Selección
+    document.querySelectorAll('.ttable tbody tr.active').forEach(x=>x.classList.remove('active'));
+    tr.classList.add('active');
+    curNode=nodo; curParent=parentCod;
+    if(isCap){
+      // Capítulo: panel derecho vacío + alternar plegado
+      document.getElementById('detailPanel').innerHTML='<div class="detail-empty">Selecciona una partida</div>';
+      if(hasKids) toggleCap(nodo.codigo);
+    }else{
+      renderDetail(nodo);
     }
   });
-  div.querySelector('.tree-toggle').addEventListener('click',e=>{
-    e.stopPropagation();const ch=div.querySelector('.tree-children');if(!ch)return;
-    const open=ch.classList.toggle('open');e.target.classList.toggle('open',open)
-  });
-  if(hasKids){
-    const chDiv=document.createElement('div');chDiv.className='tree-children';
-    nodo.hijos.forEach(h=>chDiv.appendChild(mkTreeNode(h,level+1,nodo.codigo)));
-    div.appendChild(chDiv)
-  }
-  div._nodoData=nodo;div._parentCod=parentCod;
-  return div
+  return tr;
+}
+function toggleCap(codigo){
+  if(openCaps.has(codigo)) openCaps.delete(codigo); else openCaps.add(codigo);
+  renderTree();
+}
+// Cuando la partida no tiene líneas, editar la cantidad crea una línea simple.
+async function setCantidadSimple(codHijo,codPadre,valor){
+  if(!codPadre) return;
+  refresh(await api({accion:'add_linea_medicion',codigo_hijo:codHijo,codigo_padre:codPadre,
+    comentario:'',n_uds:valor,longitud:0,anchura:0,altura:0}));
 }
 
 // ---- Editable cell helper ----
@@ -422,10 +505,13 @@ function ecFocus(el){
 // ---- Parse number from cell ----
 function parseNum(s){return parseFloat(String(s).replace(/\./g,'').replace(',','.'))||0}
 
-// ---- Render detail ----
+// ---- Render detail (solo partidas) ----
 function renderDetail(nodo){
   const panel=document.getElementById('detailPanel');
-  const isCap=nodo.tipo==='capitulo';
+  if(nodo.tipo==='capitulo'){
+    panel.innerHTML='<div class="detail-empty">Selecciona una partida</div>';
+    return;
+  }
   const pc=curParent;
   const cod=nodo.codigo;
 
@@ -433,38 +519,20 @@ function renderDetail(nodo){
     <div class="detail-code">${ec(cod,true,v=>api({accion:'codigo',codigo_viejo:cod,codigo_nuevo:v.trim()}).then(refresh),false)}</div>
     <div class="detail-name">${ec(nodo.resumen,true,v=>api({accion:'resumen',codigo:cod,valor:v}).then(refresh),false)}</div>
     <div class="detail-meta">
-      ${!isCap?`<div class="detail-meta-item"><span class="detail-meta-label">Unidad</span><span class="detail-meta-value">${ec(nodo.unidad,true,v=>api({accion:'unidad',codigo:cod,valor:v}).then(refresh),false)}</span></div>`:''}
-      ${!isCap?`<div class="detail-meta-item"><span class="detail-meta-label">Precio</span><span class="detail-meta-value">${ec(nodo.precio_fmt,true,v=>api({accion:'precio',codigo:cod,valor:parseNum(v)}).then(refresh),true)} €</span></div>`:''}
-      ${!isCap&&nodo.medicion?`<div class="detail-meta-item"><span class="detail-meta-label">Medición</span><span class="detail-meta-value">${esc(nodo.medicion_fmt)}</span></div>`:''}
+      <div class="detail-meta-item"><span class="detail-meta-label">Unidad</span><span class="detail-meta-value">${ec(nodo.unidad,true,v=>api({accion:'unidad',codigo:cod,valor:v}).then(refresh),false)}</span></div>
+      <div class="detail-meta-item"><span class="detail-meta-label">Precio</span><span class="detail-meta-value">${ec(nodo.precio_fmt,true,v=>api({accion:'precio',codigo:cod,valor:parseNum(v)}).then(refresh),true)} €</span></div>
+      ${nodo.medicion?`<div class="detail-meta-item"><span class="detail-meta-label">Cantidad</span><span class="detail-meta-value">${esc(nodo.medicion_fmt)}</span></div>`:''}
       <div class="detail-meta-item"><span class="detail-meta-label">Importe</span><span class="detail-meta-value green">${esc(nodo.importe_fmt)} €</span></div>
     </div></div>`;
 
-  // Action buttons
-  h+=`<div class="actions-bar">`;
-  if(isCap){
-    h+=`<button class="btn btn-accent btn-sm" onclick="addPartida('${esc(cod)}')">+ Partida</button>`;
-    h+=`<button class="btn btn-sm" onclick="addCapitulo('${esc(cod)}')">+ Subcapítulo</button>`;
+  // Texto (descripción larga)
+  h+=`<div class="detail-section"><h3>Descripción</h3>`;
+  if(nodo.texto){
+    h+=`<div class="detail-text">${esc(nodo.texto)}</div>`;
+  }else{
+    h+=`<div class="detail-text" style="color:var(--text-muted);font-style:italic">Sin descripción.</div>`;
   }
-  if(pc) h+=`<button class="btn btn-sm btn-danger" onclick="eliminarConcepto('${esc(cod)}','${esc(pc)}')">Eliminar</button>`;
   h+=`</div>`;
-
-  // Texto
-  if(nodo.texto) h+=`<div class="detail-section"><h3>Descripción</h3><div class="detail-text">${esc(nodo.texto)}</div></div>`;
-
-  // Capítulo: contenido
-  if(isCap&&nodo.hijos&&nodo.hijos.length>0){
-    h+=`<div class="detail-section"><h3>Contenido</h3><table class="dtable">
-      <tr><th>Código</th><th>Descripción</th><th>Ud</th><th class="num">Importe</th><th></th></tr>`;
-    nodo.hijos.forEach(c=>{
-      h+=`<tr ondblclick="dblClickChild('${esc(c.codigo)}','${esc(cod)}')">
-        <td>${ec(c.codigo,true,v=>api({accion:'codigo',codigo_viejo:c.codigo,codigo_nuevo:v.trim()}).then(refresh),false)}</td>
-        <td>${ec(c.resumen,true,v=>api({accion:'resumen',codigo:c.codigo,valor:v}).then(refresh),false)}</td>
-        <td>${ec(c.unidad,true,v=>api({accion:'unidad',codigo:c.codigo,valor:v}).then(refresh),false)}</td>
-        <td class="num" style="color:var(--green)">${esc(c.importe_fmt)} €</td>
-        <td><button class="btn btn-sm btn-danger" onclick="event.stopPropagation();eliminarConcepto('${esc(c.codigo)}','${esc(cod)}')">×</button></td></tr>`;
-    });
-    h+=`<tr class="total-row"><td colspan="3">Total</td><td class="num">${esc(nodo.importe_fmt)} €</td><td></td></tr></table></div>`;
-  }
 
   // Partida: descomposición
   if(nodo.recursos&&nodo.recursos.length>0){
@@ -482,9 +550,9 @@ function renderDetail(nodo){
     h+=`<tr class="total-row"><td colspan="5">Coste unitario</td><td class="num">${esc(nodo.precio_fmt)} €</td></tr></table></div>`;
   }
 
-  // Mediciones
+  // Mediciones (siempre visibles para partidas)
   const hasMed=nodo.lineas_medicion&&nodo.lineas_medicion.length>0;
-  if(hasMed||(!isCap&&pc)){
+  if(pc){
     h+=`<div class="detail-section"><h3>Mediciones</h3>`;
     if(hasMed){
       h+=`<table class="dtable"><tr><th>Comentario</th><th class="num">Uds</th><th class="num">Largo</th><th class="num">Ancho</th><th class="num">Alto</th><th class="num">Parcial</th><th></th></tr>`;
@@ -506,27 +574,19 @@ function renderDetail(nodo){
   panel.innerHTML=h;
 }
 
-// ---- Double click on child row to enter it ----
-function dblClickChild(codigo,parentCod){
-  const node=findNode(treeData,codigo);
-  if(node){curNode=node;curParent=parentCod;renderDetail(node);
-    // highlight in tree
-    document.querySelectorAll('.tree-node.active').forEach(n=>n.classList.remove('active'));
-    document.querySelectorAll('.tree-node').forEach(n=>{if(n._nodoData&&n._nodoData.codigo===codigo)n.classList.add('active')})
-  }
-}
-
 // ---- Actions ----
 async function addPartida(codPadre){
   const cod=prompt('Código:','');if(!cod)return;
   const res=prompt('Descripción:','');if(res===null)return;
   const ud=prompt('Unidad:','ud');if(ud===null)return;
   const pr=prompt('Precio unitario:','0');if(pr===null)return;
+  if(codPadre) openCaps.add(codPadre);
   refresh(await api({accion:'add_partida',codigo_padre:codPadre,codigo:cod,unidad:ud,resumen:res,precio:parseNum(pr)}))
 }
 async function addCapitulo(codPadre){
   const cod=prompt('Código (ej: 05#):','');if(!cod)return;
   const res=prompt('Descripción:','');if(res===null)return;
+  if(codPadre) openCaps.add(codPadre);
   refresh(await api({accion:'add_capitulo',codigo:cod,resumen:res,codigo_padre:codPadre||null}))
 }
 async function eliminarConcepto(cod,codPadre){
@@ -596,8 +656,8 @@ def main():
             print(f"  Aviso: no se encuentra '{ruta}'")
 
     Timer(1.2, lambda: webbrowser.open(f"http://localhost:{port}")).start()
-    print(f"\n  BC3Manager web → http://localhost:{port}")
-    print("  Los cambios se guardan automáticamente al archivo.")
+    print(f"\n  BC3Manager web -> http://localhost:{port}")
+    print("  Los cambios se guardan automaticamente al archivo.")
     print("  Pulsa Ctrl+C para cerrar\n")
     app.run(host="127.0.0.1", port=port, debug=False)
 
