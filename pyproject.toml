@@ -1,0 +1,24 @@
+[project]
+name = "bc3manager"
+version = "0.1.0"
+description = "Visor, editor e informes para archivos BC3 (FIEBDC-3)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Isidre Canyelles" }]
+keywords = ["bc3", "fiebdc", "presupuestos", "construccion", "presto", "mediciones"]
+dependencies = ["flask>=3.0"]
+
+[project.optional-dependencies]
+# Para exportar informes a PDF de forma automática (opcional)
+pdf = ["weasyprint"]
+
+[project.scripts]
+bc3manager = "bc3manager.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["bc3manager*"]

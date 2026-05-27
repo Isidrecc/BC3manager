@@ -1,0 +1,33 @@
+# --- Claves y secretos (NUNCA subir) ---
+.env
+.env.*
+*.key
+secrets.*
+api_key*
+*_apikey*
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# --- Datos de obra reales (no compartir presupuestos de clientes) ---
+# Se permite el ejemplo de demostración; el resto de .bc3 se ignora.
+*.bc3
+!ejemplo_son_font.bc3
+
+# --- Informes generados ---
+informe_*.html
+*.pdf
+
+# --- Editores / SO ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
