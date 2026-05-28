@@ -39,6 +39,7 @@ def _arbol_json(p: Presupuesto) -> list[dict]:
                 rec = p.get(h.codigo_hijo)
                 if rec:
                     recursos.append({"codigo": rec.codigo, "unidad": rec.unidad, "resumen": rec.resumen,
+                        "texto": rec.texto,
                         "precio": rec.precio, "precio_fmt": _fmt(rec.precio, 4),
                         "rendimiento": h.rendimiento, "rendimiento_fmt": _fmt(h.rendimiento, 4),
                         "importe": round(rec.precio * h.cantidad, 4),
@@ -71,7 +72,11 @@ def _info_json(p):
 
 def _resp():
     p = _estado["presupuesto"]
-    return jsonify({"ok": True, "info": _info_json(p), "arbol": _arbol_json(p)})
+    p.recalcular()          # garantiza precios actualizados tras cualquier edición
+    pila = _estado.get("undo_stack")
+    undo_disponible = bool(pila and len(pila) >= 2)
+    return jsonify({"ok": True, "info": _info_json(p), "arbol": _arbol_json(p),
+                    "undo_disponible": undo_disponible})
 
 
 # ============ API ENDPOINTS ============
@@ -114,14 +119,52 @@ def api_tiene_archivo():
     return jsonify({"tiene": bool(_estado.get("ruta_arg"))})
 
 def _autoguardar():
-    """Guarda el presupuesto actual al archivo original después de cada edición."""
+    """Guarda el presupuesto actual y apila un snapshot para undo (máx 20)."""
+    from collections import deque
+    from bc3manager.io.escritor import EscritorBC3
     p = _estado.get("presupuesto")
     ruta = _estado.get("ruta_original")
-    if p and ruta:
+    if not p:
+        return
+    # Guardar snapshot en memoria ANTES de escribir (para poder deshacer)
+    try:
+        snapshot = EscritorBC3(p).generar_texto()
+        pila = _estado.setdefault("undo_stack", deque(maxlen=20))
+        pila.append(snapshot)
+    except Exception:
+        pass
+    if ruta:
         try:
             escribir_bc3(p, ruta)
         except Exception:
-            pass  # No interrumpir la respuesta al usuario por un error de guardado
+            pass
+
+@app.route("/api/undo", methods=["POST"])
+def api_undo():
+    """Deshace la última edición restaurando el snapshot anterior del stack."""
+    pila = _estado.get("undo_stack")
+    if not pila or len(pila) < 2:
+        return jsonify({"error": "No hay más pasos para deshacer"}), 400
+    pila.pop()                     # descarta el estado actual
+    snapshot = pila[-1]            # restaura el anterior (sin sacarlo)
+    import tempfile, io
+    try:
+        # Escribir el snapshot a un fichero temporal y releerlo
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".bc3",
+                                         encoding="cp1252", errors="replace",
+                                         delete=False, newline="") as tmp:
+            tmp.write(snapshot)
+            ruta_tmp = tmp.name
+        p = leer_bc3(ruta_tmp)
+        import os; os.unlink(ruta_tmp)
+        _estado["presupuesto"] = p
+        # Guardar en disco si hay ruta original
+        ruta = _estado.get("ruta_original")
+        if ruta:
+            escribir_bc3(p, ruta)
+        return jsonify({"ok": True, "info": _info_json(p), "arbol": _arbol_json(p)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/informe")
 def api_informe():
@@ -167,11 +210,23 @@ def api_editar():
         elif accion == "eliminar_linea_medicion":
             p.eliminar_linea_medicion(d["codigo_hijo"], d["codigo_padre"], int(d["indice"]))
         elif accion == "add_partida":
-            p.add_partida(d["codigo_padre"], d["codigo"], d.get("unidad","ud"), d.get("resumen","Nueva partida"), float(d.get("precio",0)))
+            p.add_partida(d["codigo_padre"], d["codigo"], d.get("unidad",""), d.get("resumen",""), float(d.get("precio",0)))
         elif accion == "add_capitulo":
-            p.add_capitulo(d["codigo"], d.get("resumen","Nuevo capítulo"), d.get("codigo_padre"))
+            p.add_capitulo(d["codigo"], d.get("resumen",""), d.get("codigo_padre"))
         elif accion == "eliminar_concepto":
             p.eliminar_concepto(d["codigo"], d["codigo_padre"])
+        elif accion == "add_recurso":
+            p.add_recurso(d["codigo_partida"], d["codigo_recurso"],
+                          float(d.get("rendimiento", 1)),
+                          float(d.get("precio", 0)),
+                          d.get("unidad", ""), d.get("resumen", ""))
+        elif accion == "eliminar_recurso":
+            p.eliminar_recurso(d["codigo_partida"], d["codigo_recurso"])
+        elif accion == "texto":
+            p.modificar_texto(d["codigo"], d["valor"])
+        elif accion == "mover":
+            p.mover_concepto(d["codigo"], d["padre_origen"], d["padre_destino"],
+                             d.get("antes_de"))   # antes_de puede ser None → append
         else:
             return jsonify({"error": f"Acción desconocida: {accion}"}), 400
         _autoguardar()
@@ -245,6 +300,21 @@ button{cursor:pointer;font-family:inherit}
 .row-actions button{width:22px;height:22px;padding:0;border-radius:4px;border:1px solid var(--border);background:var(--bg-card);color:var(--text-dim);font-size:13px;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:all .1s}
 .row-actions button:hover{color:var(--text);background:var(--bg-hover);border-color:var(--border-light)}
 .row-actions button.danger:hover{color:var(--red);border-color:var(--red)}
+/* Filas fantasma para añadir */
+.ghost-row td{color:var(--text-muted);font-size:11px;padding:3px 8px;border-bottom:1px dashed var(--border);cursor:pointer;user-select:none}
+.ghost-row:hover td{background:var(--accent-soft);color:var(--accent)}
+.ghost-add{display:inline-flex;gap:12px}
+.ghost-add span{padding:1px 6px;border-radius:3px;transition:background .1s}
+.ghost-add span:hover{background:var(--accent-soft);color:var(--accent)}
+/* Drag & drop */
+.drag-handle{cursor:grab;color:var(--text-muted);font-size:13px;padding:1px 4px;user-select:none;opacity:0;transition:opacity .1s;line-height:1}
+.ttable tbody tr:hover .drag-handle,.ttable tbody tr.active .drag-handle{opacity:.45}
+.drag-handle:hover{opacity:.9!important}
+.drag-handle:active{cursor:grabbing}
+.ttable tr.dragging td{opacity:.3}
+.ttable tr.drop-before td{box-shadow:inset 0 2px 0 var(--accent)}
+.ttable tr.drop-after td{box-shadow:inset 0 -2px 0 var(--accent)}
+.ttable tr.drop-into td{background:var(--accent-soft)!important;box-shadow:inset 2px 0 0 var(--accent)}
 .detail-empty{display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:14px}
 .detail-header{margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)}
 .detail-code{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--accent);margin-bottom:4px}
@@ -255,6 +325,12 @@ button{cursor:pointer;font-family:inherit}
 .detail-meta-value{font-size:15px;font-weight:600}.detail-meta-value.green{color:var(--green)}
 .detail-section{margin-top:20px}.detail-section h3{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:10px}
 .detail-text{font-size:13px;line-height:1.6;color:var(--text-dim);background:var(--bg-card);padding:12px 16px;border-radius:var(--radius);border:1px solid var(--border)}
+.detail-text-editor{font-size:13px;line-height:1.6;color:var(--text-dim);background:var(--bg-card);padding:12px 16px;border-radius:var(--radius);border:1px solid var(--border);white-space:pre-wrap;cursor:text;min-height:64px;outline:none;transition:border-color .15s}
+.detail-text-editor:focus{border-color:var(--accent)}
+.detail-text-editor:empty::before{content:attr(placeholder);color:var(--text-muted);font-style:italic;pointer-events:none}
+.detail-breadcrumb{font-size:11px;color:var(--text-muted);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.detail-breadcrumb a{color:var(--accent);cursor:pointer;text-decoration:none}
+.detail-breadcrumb a:hover{text-decoration:underline}
 .dtable{width:100%;border-collapse:collapse;font-size:12px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
 .dtable th{background:var(--bg-card);text-align:left;padding:8px 10px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.3px;color:var(--text-dim);border-bottom:1px solid var(--border)}
 .dtable td{padding:5px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
@@ -262,12 +338,10 @@ button{cursor:pointer;font-family:inherit}
 .dtable .num{text-align:right;font-family:'JetBrains Mono',monospace;font-size:11px}
 .dtable .total-row td{font-weight:700;background:var(--bg-card);color:var(--green)}
 /* editable cells */
-.ecell{cursor:text;border-radius:3px;padding:2px 4px;transition:background .1s;min-width:30px;display:inline-block}
-.ecell:hover{background:var(--bg-active)}
-.ecell:focus{outline:2px solid var(--accent);background:var(--bg);outline-offset:-1px}
-.ecell[contenteditable=false]{cursor:default;color:var(--text-muted)}
-.ecell[contenteditable=false]:hover{background:transparent}
-.ecell[contenteditable=false]:focus{outline:2px solid var(--border);background:transparent}
+.ecell{cursor:default;border-radius:3px;padding:2px 4px;transition:background .1s;min-width:30px;display:inline-block;user-select:none}
+.ecell[data-editable=true]:hover{background:var(--bg-active);cursor:default}
+.ecell[data-editable=true]:focus{outline:1px dashed var(--border-light);outline-offset:-1px}
+.ecell[contenteditable=true]{cursor:text;user-select:text;outline:2px solid var(--accent) !important;background:var(--bg) !important;outline-offset:-1px}
 .actions-bar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
 .dropdown{position:relative}
 .dropdown-menu{display:none;position:absolute;top:100%;right:0;margin-top:4px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);min-width:200px;z-index:50;padding:4px}
@@ -291,6 +365,7 @@ button{cursor:pointer;font-family:inherit}
 <button class="dropdown-item" onclick="descargarInforme('presupuesto')">Presupuesto</button>
 <button class="dropdown-item" onclick="descargarInforme('resumen')">Resumen</button>
 </div></div>
+<button class="btn" id="undoBtn" onclick="undoAction()" title="Deshacer (Ctrl+Z)" style="display:none">↩ Deshacer</button>
 <button class="btn" onclick="exportarBC3()">Exportar BC3</button>
 <button class="btn" onclick="addCapitulo('')">+ Capítulo</button>
 <button class="btn" id="themeBtn" onclick="toggleTheme()" title="Cambiar tema">🌙</button>
@@ -315,7 +390,7 @@ button{cursor:pointer;font-family:inherit}
 <div id="loadingOverlay" style="display:none;position:fixed;inset:0;background:rgba(15,17,23,.85);z-index:200"><div class="loading" style="height:100%"><div class="spinner"></div><span>Leyendo BC3...</span></div></div>
 
 <script>
-let treeData=[], fileInfo={}, curNode=null, curParent='';
+let treeData=[], fileInfo={}, curNode=null, curParent='', _curResource=null;
 
 // ---- Upload ----
 function uploadFile(input){const f=input.files[0];if(f)sendFile(f)}
@@ -339,7 +414,25 @@ async function api(data){
 }
 function refresh(j){
   if(!j)return;fileInfo=j.info;treeData=j.arbol;renderStats();renderTree();
-  if(curNode){const f=findNode(treeData,curNode.codigo);if(f){curNode=f;renderDetail(f)}else{curNode=null;document.getElementById('detailPanel').innerHTML='<div class="detail-empty">Concepto eliminado</div>'}}
+  if(curNode){
+    const f=findNode(treeData,curNode.codigo);
+    if(f){
+      curNode=f;
+      // Si estábamos viendo el detalle de un recurso, restaurar esa vista
+      if(_curResource){
+        const rec=f.recursos&&f.recursos.find(r=>r.codigo===_curResource);
+        if(rec){renderDetailUnitario(rec,f.codigo);return;}
+        _curResource=null;
+      }
+      renderDetail(f);
+    }else{
+      curNode=null;_curResource=null;
+      if(_pasteHandler){document.removeEventListener('paste',_pasteHandler);_pasteHandler=null}
+      document.getElementById('detailPanel').innerHTML='<div class="detail-empty">Concepto eliminado</div>';
+    }
+  }
+  const undoBtn=document.getElementById('undoBtn');
+  if(undoBtn)undoBtn.style.display=(j.undo_disponible?'':'none');
 }
 function findNode(nodes,cod){for(const n of nodes){if(n.codigo===cod)return n;if(n.hijos){const f=findNode(n.hijos,cod);if(f)return f}}return null}
 
@@ -353,6 +446,26 @@ function renderApp(){
 }
 // Estado de plegado del árbol: codigos abiertos
 let openCaps=new Set();
+
+// ---- Drag & drop state ----
+let _dragInfo=null;  // {codigo, padre}
+let _dropInfo=null;  // {padre_destino, antes_de}   antes_de=null → append
+
+function _cleanDrop(){
+  document.querySelectorAll('.drop-before,.drop-after,.drop-into')
+    .forEach(el=>el.classList.remove('drop-before','drop-after','drop-into'));
+  _dropInfo=null;
+}
+
+// Devuelve el código del hermano SIGUIENTE de targetCod dentro de parentCod,
+// o null si targetCod es el último hijo.
+function _siblingAfter(parentCod, targetCod){
+  let arr;
+  if(!parentCod){arr=treeData}
+  else{const n=findNode(treeData,parentCod);arr=n?n.hijos:[]}
+  const i=arr.findIndex(n=>n.codigo===targetCod);
+  return(i>=0&&i<arr.length-1)?arr[i+1].codigo:null;
+}
 function renderStats(){
   const i=fileInfo;
   document.getElementById('statsBar').innerHTML=`
@@ -371,9 +484,54 @@ function renderTree(){
 function appendTreeRows(tbody,nodo,level,parentCod){
   tbody.appendChild(mkTreeRow(nodo,level,parentCod));
   const isCap=nodo.tipo==='capitulo';
-  if(isCap && nodo.hijos && nodo.hijos.length>0 && openCaps.has(nodo.codigo)){
-    nodo.hijos.forEach(h=>appendTreeRows(tbody,h,level+1,nodo.codigo));
+  if(isCap && openCaps.has(nodo.codigo)){
+    if(nodo.hijos && nodo.hijos.length>0)
+      nodo.hijos.forEach(h=>appendTreeRows(tbody,h,level+1,nodo.codigo));
+    tbody.appendChild(mkGhostTreeRow(nodo.codigo,level+1));
   }
+}
+// Fila fantasma al final de cada capítulo: fila en blanco real con código editable.
+// Terminar el código con # → capítulo; sin # → partida.
+function mkGhostTreeRow(codigoPadre,level){
+  const tr=document.createElement('tr');
+  tr.className='ghost-row';
+  const pad=level*16;
+  const indentHtml=`<span class="tt-indent" style="width:${pad}px"></span>`;
+  const codHtml=ec('',true,v=>{
+    const cod=(v||'').trim();
+    if(!cod)return;
+    openCaps.add(codigoPadre);
+    const accion=cod.endsWith('#')
+      ?{accion:'add_capitulo',codigo:cod,resumen:'',codigo_padre:codigoPadre}
+      :{accion:'add_partida',codigo_padre:codigoPadre,codigo:cod,unidad:'',resumen:'',precio:0};
+    api(accion).then(refresh);
+  },false);
+  tr.innerHTML=
+    `<td class="col-cod cod">${codHtml}</td>`+
+    `<td class="col-resumen">${indentHtml}`+
+    `<span class="tt-toggle leaf">▶</span>`+
+    `<span style="color:var(--text-muted);font-size:11px;font-style:italic">`+
+    `doble clic en código para añadir (#&nbsp;=&nbsp;cap.)</span></td>`+
+    `<td class="col-ud"></td>`+
+    `<td class="num col-cant"></td>`+
+    `<td class="num col-imp"></td>`+
+    `<td class="col-act"></td>`;
+  // La fila fantasma también es zona de drop: soltar aquí → append al capítulo padre
+  tr.addEventListener('dragover',e=>{
+    if(!_dragInfo)return;
+    e.preventDefault();e.dataTransfer.dropEffect='move';
+    _cleanDrop();tr.classList.add('drop-into');
+    _dropInfo={padre_destino:codigoPadre,antes_de:null};
+  });
+  tr.addEventListener('dragleave',e=>{if(!tr.contains(e.relatedTarget))tr.classList.remove('drop-into')});
+  tr.addEventListener('drop',e=>{
+    e.preventDefault();
+    if(!_dragInfo||!_dropInfo)return;
+    const{codigo,padre:padre_origen}=_dragInfo;
+    _cleanDrop();_dragInfo=null;
+    api({accion:'mover',codigo,padre_origen,padre_destino:codigoPadre,antes_de:null}).then(refresh);
+  });
+  return tr;
 }
 // Crea una fila <tr> con sus celdas y handlers.
 function mkTreeRow(nodo,level,parentCod){
@@ -404,6 +562,7 @@ function mkTreeRow(nodo,level,parentCod){
 
   // Acciones contextuales por fila
   let actsHtml='<div class="row-actions">';
+  if(parentCod) actsHtml+=`<span class="drag-handle" title="Arrastrar para mover">⠿</span>`;
   if(isCap){
     actsHtml+=`<button title="+ Subcapítulo" data-act="addcap">＋</button>`;
     actsHtml+=`<button title="+ Partida" data-act="addpart">▦</button>`;
@@ -411,35 +570,81 @@ function mkTreeRow(nodo,level,parentCod){
   if(parentCod) actsHtml+=`<button class="danger" title="Eliminar" data-act="del">×</button>`;
   actsHtml+='</div>';
 
+  // El atributo draggable solo si tiene padre (no se puede mover la raíz)
+  if(parentCod) tr.draggable=true;
+
   tr.innerHTML=
-    `<td class="col-cod cod">${indentHtml}${toggleHtml}${ec(nodo.codigo,true,v=>api({accion:'codigo',codigo_viejo:nodo.codigo,codigo_nuevo:v.trim()}).then(refresh),false)}</td>`+
-    `<td class="col-resumen">${badgeHtml}${ec(nodo.resumen,true,v=>api({accion:'resumen',codigo:nodo.codigo,valor:v}).then(refresh),false)}</td>`+
-    `<td class="col-ud">${ec(nodo.unidad||'',true,v=>api({accion:'unidad',codigo:nodo.codigo,valor:v}).then(refresh),false)}</td>`+
+    `<td class="col-cod cod">${ec(nodo.codigo,true,v=>api({accion:'codigo',codigo_viejo:nodo.codigo,codigo_nuevo:v.trim()}).then(refresh),false)}</td>`+
+    `<td class="col-resumen">${indentHtml}${toggleHtml}${badgeHtml}${ec(nodo.resumen,true,v=>api({accion:'resumen',codigo:nodo.codigo,valor:v}).then(refresh),false)}</td>`+
+    `<td class="col-ud">${isCap?'':ec(nodo.unidad||'',true,v=>api({accion:'unidad',codigo:nodo.codigo,valor:v}).then(refresh),false)}</td>`+
     `<td class="num col-cant">${cantHtml}</td>`+
     `<td class="num col-imp imp">${esc(nodo.importe_fmt)} €</td>`+
     `<td class="col-act">${actsHtml}</td>`;
 
-  // Clic en celda: selecciona la fila (si es partida abre el detalle); el toggle se gestiona aparte
+  // ---- Clic ----
   tr.addEventListener('click',e=>{
     const t=e.target;
-    if(t.classList && t.classList.contains('ecell')) return;       // edición inline
     const act=t.getAttribute && t.getAttribute('data-act');
     if(act==='toggle'){ toggleCap(nodo.codigo); return; }
     if(act==='addcap'){ e.stopPropagation(); addCapitulo(nodo.codigo); return; }
     if(act==='addpart'){ e.stopPropagation(); addPartida(nodo.codigo); return; }
     if(act==='del'){ e.stopPropagation(); eliminarConcepto(nodo.codigo,parentCod); return; }
-    // Selección
+    const sameNode=curNode&&curNode.codigo===nodo.codigo&&curParent===parentCod;
     document.querySelectorAll('.ttable tbody tr.active').forEach(x=>x.classList.remove('active'));
     tr.classList.add('active');
     curNode=nodo; curParent=parentCod;
+    if(sameNode) return;
     if(isCap){
-      // Capítulo: panel derecho vacío + alternar plegado
-      document.getElementById('detailPanel').innerHTML='<div class="detail-empty">Selecciona una partida</div>';
+      renderDetailCapitulo(nodo);
       if(hasKids) toggleCap(nodo.codigo);
     }else{
       renderDetail(nodo);
     }
   });
+
+  // ---- Drag ----
+  if(parentCod){
+    tr.addEventListener('dragstart',e=>{
+      if(document.activeElement&&document.activeElement.contentEditable==='true'){e.preventDefault();return}
+      _dragInfo={codigo:nodo.codigo,padre:parentCod};
+      e.dataTransfer.effectAllowed='move';
+      e.dataTransfer.setData('text/plain',nodo.codigo);
+      // Aplazar el addClass para que el snapshot del drag muestre la fila normal
+      requestAnimationFrame(()=>tr.classList.add('dragging'));
+    });
+    tr.addEventListener('dragend',()=>{tr.classList.remove('dragging');_cleanDrop();_dragInfo=null});
+  }
+
+  tr.addEventListener('dragover',e=>{
+    if(!_dragInfo||_dragInfo.codigo===nodo.codigo) return;
+    e.preventDefault();e.dataTransfer.dropEffect='move';
+    _cleanDrop();
+    const mid=tr.getBoundingClientRect().top+tr.getBoundingClientRect().height/2;
+    if(isCap&&e.clientY>mid){
+      // Hover sobre la mitad inferior de un capítulo → soltar DENTRO
+      tr.classList.add('drop-into');
+      _dropInfo={padre_destino:nodo.codigo,antes_de:null};
+    }else if(e.clientY<mid){
+      tr.classList.add('drop-before');
+      _dropInfo={padre_destino:parentCod,antes_de:nodo.codigo};
+    }else{
+      tr.classList.add('drop-after');
+      const sig=_siblingAfter(parentCod,nodo.codigo);
+      _dropInfo={padre_destino:parentCod,antes_de:sig};
+    }
+  });
+  tr.addEventListener('dragleave',e=>{
+    if(!tr.contains(e.relatedTarget))tr.classList.remove('drop-before','drop-after','drop-into');
+  });
+  tr.addEventListener('drop',e=>{
+    e.preventDefault();
+    if(!_dragInfo||!_dropInfo)return;
+    const {padre_destino,antes_de}=_dropInfo;
+    const {codigo,padre:padre_origen}=_dragInfo;
+    _cleanDrop();_dragInfo=null;
+    api({accion:'mover',codigo,padre_origen,padre_destino,antes_de}).then(refresh);
+  });
+
   return tr;
 }
 function toggleCap(codigo){
@@ -454,62 +659,167 @@ async function setCantidadSimple(codHijo,codPadre,valor){
 }
 
 // ---- Editable cell helper ----
+// Las celdas son read-only por defecto. Doble clic activa la edición.
 function ec(val,editable,saveCallback,isNum){
-  // Returns HTML for an editable cell
-  const ce=editable?'true':'false';
   const cls=isNum?'ecell num':'ecell';
   const display=val==null||val===''?'':val;
+  if(!editable||!saveCallback){
+    return `<span class="${cls}" contenteditable="false">${esc(String(display))}</span>`;
+  }
   const id='ec'+Math.random().toString(36).substr(2,6);
-  // We store the callback globally and call it on blur
   window['_ec_'+id]=saveCallback;
-  return `<span class="${cls}" contenteditable="${ce}" id="${id}"
-    onfocus="ecFocus(this)"
-    onblur="if(window['_ec_${id}'])window['_ec_${id}'](this.textContent)"
+  const orig=esc(String(display));
+  return `<span class="${cls}" contenteditable="false" data-editable="true" data-orig="${orig}" id="${id}"
+    title="Doble clic para editar"
+    ondblclick="ecActivate(this)"
+    onblur="ecBlur(this,'${id}')"
     onkeydown="ecKey(event,this)"
     tabindex="0">${esc(String(display))}</span>`;
 }
 
-function ecKey(e,el){
-  if(e.key==='Enter'){e.preventDefault();el.blur();
-    // Move to next ecell
-    const all=[...document.querySelectorAll('.ecell')];const i=all.indexOf(el);
-    if(i>=0&&i<all.length-1)all[i+1].focus()
-  }else if(e.key==='Tab'){
-    e.preventDefault();const all=[...document.querySelectorAll('.ecell')];const i=all.indexOf(el);
-    if(e.shiftKey){if(i>0)all[i-1].focus()}else{if(i<all.length-1)all[i+1].focus()}
-  }else if(e.key==='ArrowDown'||e.key==='ArrowUp'){
-    // Try to move in same column
-    const all=[...document.querySelectorAll('.ecell')];const i=all.indexOf(el);
-    const tr=el.closest('tr');if(!tr)return;const table=tr.closest('table');if(!table)return;
-    const rows=[...table.querySelectorAll('tr')];const ri=rows.indexOf(tr);
-    const cells=[...tr.querySelectorAll('.ecell')];const ci=cells.indexOf(el);
-    const targetRow=e.key==='ArrowDown'?rows[ri+1]:rows[ri-1];
-    if(targetRow){const targetCells=[...targetRow.querySelectorAll('.ecell')];
-      if(targetCells[ci]){e.preventDefault();el.blur();targetCells[ci].focus()}}
-  }else if(e.key==='Escape'){
-    el.blur()
-  }
+// Activa la edición de una celda (doble clic o Tab+Enter)
+function ecActivate(el){
+  if(el.dataset.editable!=='true')return;
+  el.dataset.orig=el.textContent;   // guarda valor actual para Escape
+  el.contentEditable='true';
+  el.title='';
+  el.focus();
+  const range=document.createRange();
+  range.selectNodeContents(el);
+  const sel=window.getSelection();
+  sel.removeAllRanges();sel.addRange(range);
 }
 
-// Select only the cell content, not the whole page
-function ecFocus(el){
-  if(el.contentEditable==='true'){
-    const range=document.createRange();
-    range.selectNodeContents(el);
+// Desactiva la edición y guarda (a menos que se canceló con Escape)
+function ecBlur(el,id){
+  if(el.dataset.cancelling)return;
+  el.contentEditable='false';
+  el.title='Doble clic para editar';
+  if(window['_ec_'+id])window['_ec_'+id](el.textContent);
+}
+
+function ecKey(e,el){
+  if(el.contentEditable!=='true')return;   // no está en modo edición
+  if(e.key==='Escape'){
+    e.preventDefault();
+    el.dataset.cancelling='true';
+    el.textContent=el.dataset.orig||'';
+    el.contentEditable='false';
+    el.title='Doble clic para editar';
+    el.blur();
+    delete el.dataset.cancelling;
+    return;
+  }
+  if(e.key==='Enter'){
+    e.preventDefault();el.blur();   // guarda y desactiva
+    return;
+  }
+  if(e.key==='Tab'){
+    e.preventDefault();el.blur();
+    const all=[...document.querySelectorAll('.ecell[data-editable=true]')];
+    const i=all.indexOf(el);
+    const next=e.shiftKey?all[i-1]:all[i+1];
+    if(next)ecActivate(next);   // Tab activa directamente la siguiente celda
+    return;
+  }
+  if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+    // Navega a la misma columna en la fila anterior/siguiente de la misma tabla
+    const tr=el.closest('tr');if(!tr)return;
+    const table=tr.closest('table');if(!table)return;
+    const rows=[...table.querySelectorAll('tbody tr, tr')].filter(r=>r.querySelector('.ecell[data-editable=true]'));
+    const ri=rows.indexOf(tr);
+    const cells=[...tr.querySelectorAll('.ecell[data-editable=true]')];
+    const ci=cells.indexOf(el);
+    const targetRow=e.key==='ArrowDown'?rows[ri+1]:rows[ri-1];
+    if(!targetRow)return;
+    const targetCells=[...targetRow.querySelectorAll('.ecell[data-editable=true]')];
+    const targetCell=targetCells[ci]||targetCells[targetCells.length-1];
+    if(targetCell){e.preventDefault();el.blur();ecActivate(targetCell);}
+    return;
+  }
+  if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
+    // Solo navega entre celdas de la misma fila si el cursor está al borde del texto
     const sel=window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
+    const atStart=sel&&sel.anchorOffset===0;
+    const atEnd=sel&&sel.anchorOffset===(el.textContent.length);
+    if(e.key==='ArrowLeft'&&!atStart)return;
+    if(e.key==='ArrowRight'&&!atEnd)return;
+    e.preventDefault();el.blur();
+    const all=[...document.querySelectorAll('.ecell[data-editable=true]')];
+    const i=all.indexOf(el);
+    const next=e.key==='ArrowRight'?all[i+1]:all[i-1];
+    if(next)ecActivate(next);
+    return;
   }
 }
 
 // ---- Parse number from cell ----
 function parseNum(s){return parseFloat(String(s).replace(/\./g,'').replace(',','.'))||0}
 
-// ---- Render detail (solo partidas) ----
+// ---- Texto largo editable (compartido por capítulos, partidas y unitarios) ----
+// El texto se establece via textContent DESPUÉS de panel.innerHTML para manejar \n correctamente.
+function _setupTexto(panel, cod, textoOrig){
+  const te=panel.querySelector('.detail-text-editor');
+  if(!te)return;
+  te.textContent=textoOrig||'';
+  te.addEventListener('blur',()=>{
+    const val=te.innerText.replace(/\r\n/g,'\n').replace(/\r/g,'\n');
+    if(val!==textoOrig){textoOrig=val;api({accion:'texto',codigo:cod,valor:val}).then(refresh)}
+  });
+  te.addEventListener('keydown',e=>{
+    if(e.key==='Escape'){te.textContent=textoOrig||'';te.blur()}
+    // Tab y Enter funcionan normalmente en textos largos
+  });
+}
+
+// ---- Render detail — capítulo ----
+function renderDetailCapitulo(nodo){
+  _curResource=null;
+  if(_pasteHandler){document.removeEventListener('paste',_pasteHandler);_pasteHandler=null}
+  const panel=document.getElementById('detailPanel');
+  const cod=nodo.codigo;
+  let h=`<div class="detail-header">
+    <div class="detail-code">${ec(cod,true,v=>api({accion:'codigo',codigo_viejo:cod,codigo_nuevo:v.trim()}).then(refresh),false)}</div>
+    <div class="detail-name">${ec(nodo.resumen,true,v=>api({accion:'resumen',codigo:cod,valor:v}).then(refresh),false)}</div>
+    <div class="detail-meta">
+      <div class="detail-meta-item"><span class="detail-meta-label">Importe</span><span class="detail-meta-value green">${esc(nodo.importe_fmt)} €</span></div>
+    </div></div>`;
+  h+=`<div class="detail-section"><h3>Descripción larga</h3>
+    <div class="detail-text-editor" contenteditable="true" spellcheck="false"
+      placeholder="Sin descripción — haz clic para añadir…"></div></div>`;
+  panel.innerHTML=h;
+  _setupTexto(panel,cod,nodo.texto||'');
+}
+
+// ---- Render detail — unitario (recurso de desglose) ----
+function renderDetailUnitario(r, codPartida){
+  _curResource=r.codigo;
+  if(_pasteHandler){document.removeEventListener('paste',_pasteHandler);_pasteHandler=null}
+  const panel=document.getElementById('detailPanel');
+  let h=`<div class="detail-breadcrumb">
+    <a onclick="_curResource=null;renderDetail(curNode)">← ${esc(codPartida)}</a>
+    <span>/ recurso</span></div>`;
+  h+=`<div class="detail-header">
+    <div class="detail-code">${ec(r.codigo,true,v=>api({accion:'codigo',codigo_viejo:r.codigo,codigo_nuevo:v.trim()}).then(refresh),false)}</div>
+    <div class="detail-name">${ec(r.resumen,true,v=>api({accion:'resumen',codigo:r.codigo,valor:v}).then(refresh),false)}</div>
+    <div class="detail-meta">
+      <div class="detail-meta-item"><span class="detail-meta-label">Unidad</span><span class="detail-meta-value">${ec(r.unidad,true,v=>api({accion:'unidad',codigo:r.codigo,valor:v}).then(refresh),false)}</span></div>
+      <div class="detail-meta-item"><span class="detail-meta-label">Precio</span><span class="detail-meta-value">${ec(r.precio_fmt,true,v=>api({accion:'precio',codigo:r.codigo,valor:parseNum(v)}).then(refresh),true)} €</span></div>
+    </div></div>`;
+  h+=`<div class="detail-section"><h3>Descripción larga</h3>
+    <div class="detail-text-editor" contenteditable="true" spellcheck="false"
+      placeholder="Sin descripción — haz clic para añadir…"></div></div>`;
+  panel.innerHTML=h;
+  _setupTexto(panel,r.codigo,r.texto||'');
+}
+
+// ---- Render detail — partida ----
 function renderDetail(nodo){
+  _curResource=null;
   const panel=document.getElementById('detailPanel');
   if(nodo.tipo==='capitulo'){
-    panel.innerHTML='<div class="detail-empty">Selecciona una partida</div>';
+    if(_pasteHandler){document.removeEventListener('paste',_pasteHandler);_pasteHandler=null}
+    renderDetailCapitulo(nodo);
     return;
   }
   const pc=curParent;
@@ -520,42 +830,64 @@ function renderDetail(nodo){
     <div class="detail-name">${ec(nodo.resumen,true,v=>api({accion:'resumen',codigo:cod,valor:v}).then(refresh),false)}</div>
     <div class="detail-meta">
       <div class="detail-meta-item"><span class="detail-meta-label">Unidad</span><span class="detail-meta-value">${ec(nodo.unidad,true,v=>api({accion:'unidad',codigo:cod,valor:v}).then(refresh),false)}</span></div>
-      <div class="detail-meta-item"><span class="detail-meta-label">Precio</span><span class="detail-meta-value">${ec(nodo.precio_fmt,true,v=>api({accion:'precio',codigo:cod,valor:parseNum(v)}).then(refresh),true)} €</span></div>
-      ${nodo.medicion?`<div class="detail-meta-item"><span class="detail-meta-label">Cantidad</span><span class="detail-meta-value">${esc(nodo.medicion_fmt)}</span></div>`:''}
+      <div class="detail-meta-item"><span class="detail-meta-label">Cantidad</span><span class="detail-meta-value">
+        ${nodo.lineas_medicion&&nodo.lineas_medicion.length>0
+          ? `<span class="ecell" contenteditable="false" title="Calculada desde las líneas de medición" style="cursor:default;opacity:.7">${esc(nodo.medicion_fmt||'0,00')}</span> <span title="No editable directamente" style="font-size:11px;color:var(--text-muted)">🔒</span>`
+          : `${ec(nodo.medicion_fmt||'0,00',true,v=>setCantidadSimple(cod,pc,parseNum(v)).then(refresh),true)}`
+        }
+      </span></div>
+      <div class="detail-meta-item"><span class="detail-meta-label">Precio</span><span class="detail-meta-value">
+        ${nodo.recursos&&nodo.recursos.length>0
+          ? `<span class="ecell" contenteditable="false" title="Calculado desde la descomposición" style="cursor:default;opacity:.7">${esc(nodo.precio_fmt)}</span> € <span style="font-size:11px;color:var(--text-muted)">🔒</span>`
+          : `${ec(nodo.precio_fmt,true,v=>api({accion:'precio',codigo:cod,valor:parseNum(v)}).then(refresh),true)} €`
+        }
+      </span></div>
       <div class="detail-meta-item"><span class="detail-meta-label">Importe</span><span class="detail-meta-value green">${esc(nodo.importe_fmt)} €</span></div>
     </div></div>`;
 
-  // Texto (descripción larga)
-  h+=`<div class="detail-section"><h3>Descripción</h3>`;
-  if(nodo.texto){
-    h+=`<div class="detail-text">${esc(nodo.texto)}</div>`;
-  }else{
-    h+=`<div class="detail-text" style="color:var(--text-muted);font-style:italic">Sin descripción.</div>`;
-  }
-  h+=`</div>`;
+  // Texto largo — editable
+  h+=`<div class="detail-section"><h3>Descripción larga</h3>
+    <div class="detail-text-editor" contenteditable="true" spellcheck="false"
+      placeholder="Sin descripción — haz clic para añadir…"></div></div>`;
 
-  // Partida: descomposición
-  if(nodo.recursos&&nodo.recursos.length>0){
+  // Descomposición
+  {
     h+=`<div class="detail-section"><h3>Descomposición</h3><table class="dtable">
-      <tr><th>Código</th><th>Descripción</th><th>Ud</th><th class="num">Rendimiento</th><th class="num">Precio</th><th class="num">Importe</th></tr>`;
-    nodo.recursos.forEach(r=>{
-      h+=`<tr>
-        <td>${ec(r.codigo,true,v=>api({accion:'codigo',codigo_viejo:r.codigo,codigo_nuevo:v.trim()}).then(refresh),false)}</td>
-        <td>${ec(r.resumen,true,v=>api({accion:'resumen',codigo:r.codigo,valor:v}).then(refresh),false)}</td>
-        <td>${ec(r.unidad,true,v=>api({accion:'unidad',codigo:r.codigo,valor:v}).then(refresh),false)}</td>
-        <td class="num">${ec(r.rendimiento_fmt,true,v=>api({accion:'rendimiento',codigo_padre:cod,codigo_hijo:r.codigo,valor:parseNum(v)}).then(refresh),true)}</td>
-        <td class="num">${ec(r.precio_fmt,true,v=>api({accion:'precio',codigo:r.codigo,valor:parseNum(v)}).then(refresh),true)} €</td>
-        <td class="num" style="color:var(--green)">${esc(r.importe_fmt)} €</td></tr>`;
-    });
-    h+=`<tr class="total-row"><td colspan="5">Coste unitario</td><td class="num">${esc(nodo.precio_fmt)} €</td></tr></table></div>`;
+      <tr><th>Código</th><th>Descripción</th><th>Ud</th><th class="num">Rendimiento</th><th class="num">Precio</th><th class="num">Importe</th><th></th></tr>`;
+    if(nodo.recursos&&nodo.recursos.length>0){
+      nodo.recursos.forEach(r=>{
+        h+=`<tr>
+          <td>${ec(r.codigo,true,v=>api({accion:'codigo',codigo_viejo:r.codigo,codigo_nuevo:v.trim()}).then(refresh),false)}</td>
+          <td>${ec(r.resumen,true,v=>api({accion:'resumen',codigo:r.codigo,valor:v}).then(refresh),false)}</td>
+          <td>${ec(r.unidad,true,v=>api({accion:'unidad',codigo:r.codigo,valor:v}).then(refresh),false)}</td>
+          <td class="num">${ec(r.rendimiento_fmt,true,v=>api({accion:'rendimiento',codigo_padre:cod,codigo_hijo:r.codigo,valor:parseNum(v)}).then(refresh),true)}</td>
+          <td class="num">${ec(r.precio_fmt,true,v=>api({accion:'precio',codigo:r.codigo,valor:parseNum(v)}).then(refresh),true)} €</td>
+          <td class="num" style="color:var(--green)">${esc(r.importe_fmt)} €</td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-sm" title="Ver/editar ficha del recurso"
+              onclick="event.stopPropagation();renderDetailUnitario(curNode.recursos.find(x=>x.codigo==='${esc(r.codigo)}'),'${esc(cod)}')">→</button>
+            <button class="btn btn-sm btn-danger" title="Quitar de la descomposición"
+              onclick="event.stopPropagation();api({accion:'eliminar_recurso',codigo_partida:'${esc(cod)}',codigo_recurso:'${esc(r.codigo)}'}).then(refresh)">×</button>
+          </td></tr>`;
+      });
+      h+=`<tr class="total-row"><td colspan="5">Coste unitario</td><td class="num">${esc(nodo.precio_fmt)} €</td><td></td></tr>`;
+    }
+    h+=`<tr class="ghost-row" style="cursor:default">
+      <td>${ec('',true,v=>{const c=(v||'').trim();if(!c)return;api({accion:'add_recurso',codigo_partida:cod,codigo_recurso:c,rendimiento:1,precio:0,unidad:'',resumen:''}).then(refresh)},false)}</td>
+      <td colspan="5" style="color:var(--text-muted);font-style:italic;font-size:11px;padding:5px 10px">doble clic en código para añadir recurso</td>
+      <td></td></tr>`;
+    h+=`</table></div>`;
   }
 
-  // Mediciones (siempre visibles para partidas)
-  const hasMed=nodo.lineas_medicion&&nodo.lineas_medicion.length>0;
+  // Mediciones
   if(pc){
-    h+=`<div class="detail-section"><h3>Mediciones</h3>`;
+    const hasMed=nodo.lineas_medicion&&nodo.lineas_medicion.length>0;
+    const medId='med-'+cod.replace(/[^a-zA-Z0-9]/g,'_');
+    h+=`<div class="detail-section"><h3>Mediciones <span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:6px">Ctrl+V para pegar desde Excel</span></h3>`;
+    h+=`<table class="dtable" id="${medId}"><tr>
+      <th>Comentario</th><th class="num">Uds</th><th class="num">Largo</th>
+      <th class="num">Ancho</th><th class="num">Alto</th><th class="num">Parcial</th><th></th></tr>`;
     if(hasMed){
-      h+=`<table class="dtable"><tr><th>Comentario</th><th class="num">Uds</th><th class="num">Largo</th><th class="num">Ancho</th><th class="num">Alto</th><th class="num">Parcial</th><th></th></tr>`;
       nodo.lineas_medicion.forEach((ln,i)=>{
         const mf=(campo,v)=>api({accion:'medicion',codigo_hijo:cod,codigo_padre:pc,indice:i,campo,valor:campo==='comentario'?v:parseNum(v)}).then(refresh);
         h+=`<tr>
@@ -567,11 +899,64 @@ function renderDetail(nodo){
           <td class="num" style="font-weight:600">${ec(ln.subtotal_fmt,false,null,true)}</td>
           <td><button class="btn btn-sm btn-danger" onclick="eliminarLineaMed('${esc(cod)}','${esc(pc)}',${i})">×</button></td></tr>`;
       });
-      h+=`<tr class="total-row"><td>Total</td><td colspan="5"></td><td class="num">${esc(nodo.medicion_fmt)}</td></tr></table>`;
-    }else{h+=`<p style="color:var(--text-muted);font-size:13px;margin-bottom:8px">Sin líneas de medición.</p>`}
-    h+=`<button class="btn btn-sm" style="margin-top:8px" onclick="addLineaMed('${esc(cod)}','${esc(pc)}')">+ Línea de medición</button></div>`;
+      h+=`<tr class="total-row"><td>Total</td><td colspan="5"></td><td class="num">${esc(nodo.medicion_fmt)}</td></tr>`;
+    }
+    {
+      const base={accion:'add_linea_medicion',codigo_hijo:cod,codigo_padre:pc,comentario:'',n_uds:0,longitud:0,anchura:0,altura:0};
+      const mcb=f=>v=>{if((v||'').trim()==='')return;const d=Object.assign({},base);d[f]=f==='comentario'?v.trim():parseNum(v);api(d).then(refresh)};
+      h+=`<tr class="ghost-row" style="cursor:default">
+        <td>${ec('',true,mcb('comentario'),false)}</td>
+        <td class="num">${ec('',true,mcb('n_uds'),true)}</td>
+        <td class="num">${ec('',true,mcb('longitud'),true)}</td>
+        <td class="num">${ec('',true,mcb('anchura'),true)}</td>
+        <td class="num">${ec('',true,mcb('altura'),true)}</td>
+        <td class="num"></td><td></td></tr>`;
+    }
+    h+=`</table></div>`;
   }
   panel.innerHTML=h;
+  _setupTexto(panel,cod,nodo.texto||'');
+  _instalarPasteHandler(cod,pc);
+}
+
+// Handler de pegado desde Excel — se guarda para poder desinstalarlo al cambiar de partida.
+let _pasteHandler=null;
+function _instalarPasteHandler(cod, pc){
+  // Desinstalar el anterior si existe
+  if(_pasteHandler){document.removeEventListener('paste',_pasteHandler);_pasteHandler=null}
+  if(!pc) return;   // sin padre (raíz) no tiene mediciones
+  _pasteHandler=function(e){
+    // Sólo actuar si NO estamos editando un ecell (para no interferir con el pegado normal en celdas)
+    if(document.activeElement&&document.activeElement.contentEditable==='true') return;
+    const panel=document.getElementById('detailPanel');
+    if(!panel||!panel.querySelector('#med-'+cod.replace(/[^a-zA-Z0-9]/g,'_'))) return; // partida ya no está visible
+    const txt=(e.clipboardData||window.clipboardData).getData('text');
+    if(!txt) return;
+    // Detectar si es pegado TSV de Excel (con tabuladores o al menos una línea de datos)
+    const rows=txt.trim().split(/\r?\n/).filter(r=>r.trim());
+    if(!rows.length) return;
+    // Si no hay tabuladores y sólo hay una fila podría ser texto normal — sólo interceptamos si hay tabs o varias filas
+    if(rows.length===1 && !rows[0].includes('\t')) return;
+    e.preventDefault();
+    const cols0=rows[0].split('\t');
+    // Heurística: si la primera columna parece una cabecera (todo texto, sin números) la saltamos
+    const primeraEsHeader=cols0.length>=2 && isNaN(parseFloat(cols0[1].replace(',','.')));
+    const filas=primeraEsHeader?rows.slice(1):rows;
+    if(!filas.length) return;
+    let chain=Promise.resolve(), lastJ=null;
+    filas.forEach(row=>{
+      const cols=row.split('\t');
+      const comentario=(cols[0]||'').trim();
+      const n_uds   =parseNum(cols[1]||'0');
+      const longitud=parseNum(cols[2]||'0');
+      const anchura =parseNum(cols[3]||'0');
+      const altura  =parseNum(cols[4]||'0');
+      chain=chain.then(j=>{lastJ=j;return api({accion:'add_linea_medicion',
+        codigo_hijo:cod,codigo_padre:pc,comentario,n_uds,longitud,anchura,altura})});
+    });
+    chain.then(j=>refresh(j||lastJ));
+  };
+  document.addEventListener('paste',_pasteHandler);
 }
 
 // ---- Actions ----
@@ -628,6 +1013,20 @@ window.addEventListener('DOMContentLoaded', ()=>{
     }
   })
 })
+
+async function undoAction(){
+  const r=await fetch('/api/undo',{method:'POST'});
+  const j=await r.json();
+  if(j.error){alert(j.error);return}
+  refresh(j);
+}
+document.addEventListener('keydown',e=>{
+  if((e.ctrlKey||e.metaKey)&&e.key==='z'&&!e.shiftKey){
+    // Solo si no hay una celda en edición activa
+    if(document.activeElement&&document.activeElement.contentEditable==='true')return;
+    e.preventDefault();undoAction();
+  }
+});
 
 function toggleTheme(){
   const cur=document.documentElement.getAttribute('data-theme')||'dark';

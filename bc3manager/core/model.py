@@ -273,10 +273,15 @@ class Presupuesto:
     # ---- Operaciones de edición -----------------------------------------
 
     def modificar_precio(self, codigo: str, nuevo_precio: float) -> None:
-        """Cambia el precio unitario de un concepto hoja y recalcula."""
+        """Cambia el precio unitario de un concepto hoja y recalcula.
+        Lanza ValueError si el concepto tiene descomposición (precio calculado)."""
         c = self.conceptos.get(codigo)
         if c is None:
             raise ValueError(f"Concepto '{codigo}' no encontrado")
+        if c.hijos:
+            raise ValueError(
+                f"'{codigo}' tiene descomposición — el precio es calculado y no se puede editar directamente"
+            )
         c.precio = nuevo_precio
         c.precio_es_dato = True
         c._precio_bc3 = nuevo_precio
@@ -386,6 +391,13 @@ class Presupuesto:
             raise ValueError(f"Concepto '{codigo}' no encontrado")
         c.resumen = resumen
 
+    def modificar_texto(self, codigo: str, texto: str) -> None:
+        """Cambia la descripción larga (texto pliego) de un concepto."""
+        c = self.conceptos.get(codigo)
+        if c is None:
+            raise ValueError(f"Concepto '{codigo}' no encontrado")
+        c.texto = texto
+
     def modificar_unidad(self, codigo: str, unidad: str) -> None:
         """Cambia la unidad de medida de un concepto."""
         c = self.conceptos.get(codigo)
@@ -431,6 +443,124 @@ class Presupuesto:
                 h.rendimiento = rendimiento
                 return
         raise ValueError(f"Hijo '{codigo_hijo}' no encontrado en '{codigo_padre}'")
+
+    def add_recurso(
+        self, codigo_partida: str, codigo_recurso: str,
+        rendimiento: float = 1.0, precio: float = 0.0,
+        unidad: str = "", resumen: str = ""
+    ) -> None:
+        """Añade un recurso unitario a la descomposición de una partida.
+
+        Si el recurso no existe en el presupuesto, se crea como UNITARIO con los
+        datos proporcionados.  Si ya existe como hijo de la partida, actualiza su
+        rendimiento.  Si existe como concepto pero no está en la descomposición,
+        lo enlaza.
+        """
+        partida = self.conceptos.get(codigo_partida)
+        if partida is None:
+            raise ValueError(f"Partida '{codigo_partida}' no encontrada")
+        # Crear el recurso si no existe
+        if not self.conceptos.get(codigo_recurso):
+            nuevo = Concepto(
+                codigo=codigo_recurso,
+                unidad=unidad,
+                resumen=resumen or codigo_recurso,
+                precio=precio,
+                tipo=TipoConcepto.UNITARIO,
+                precio_es_dato=True,
+            )
+            nuevo._precio_bc3 = precio  # type: ignore[attr-defined]
+            self.add_concepto(nuevo)
+        # Si ya está en la descomposición, sólo actualiza rendimiento
+        for h in partida.hijos:
+            if h.codigo_hijo == codigo_recurso:
+                h.rendimiento = rendimiento
+                return
+        # Enlazar como nuevo hijo
+        partida.hijos.append(Hijo(codigo_hijo=codigo_recurso, factor=1.0, rendimiento=rendimiento))
+        partida.precio_es_dato = False
+
+    def eliminar_recurso(self, codigo_partida: str, codigo_recurso: str) -> None:
+        """Desvincula un recurso de la descomposición de una partida.
+        No elimina el concepto recurso del presupuesto (puede usarse en otros sitios)."""
+        partida = self.conceptos.get(codigo_partida)
+        if partida is None:
+            raise ValueError(f"Partida '{codigo_partida}' no encontrada")
+        antes = len(partida.hijos)
+        partida.hijos = [h for h in partida.hijos if h.codigo_hijo != codigo_recurso]
+        if len(partida.hijos) == antes:
+            raise ValueError(f"Recurso '{codigo_recurso}' no encontrado en '{codigo_partida}'")
+
+    def mover_concepto(
+        self, codigo: str, padre_origen: str,
+        padre_destino: str, antes_de: Optional[str] = None
+    ) -> None:
+        """Mueve un concepto de su padre origen al padre destino.
+
+        antes_de=None  → se añade al final.
+        antes_de='X'   → se inserta antes del hijo con codigo_hijo=='X'.
+
+        Lanza ValueError si:
+          - algún padre no existe
+          - el concepto no está en padre_origen
+          - se intentaría crear un ciclo (padre_destino desciende de codigo)
+          - el concepto ya existe en padre_destino (usar clonar_concepto para duplicar)
+        """
+        origen = self.conceptos.get(padre_origen)
+        destino = self.conceptos.get(padre_destino)
+        if origen is None:
+            raise ValueError(f"Padre origen '{padre_origen}' no encontrado")
+        if destino is None:
+            raise ValueError(f"Padre destino '{padre_destino}' no encontrado")
+        if padre_destino == codigo:
+            raise ValueError("No se puede mover un concepto dentro de sí mismo")
+        if self._es_descendiente(padre_destino, codigo):
+            raise ValueError(
+                f"No se puede mover '{codigo}' dentro de uno de sus propios descendientes"
+            )
+        # Impedir mover a un capítulo donde el concepto ya está presente
+        if padre_destino != padre_origen:
+            if any(h.codigo_hijo == codigo for h in destino.hijos):
+                raise ValueError(
+                    f"'{codigo}' ya existe en '{padre_destino}'. "
+                    f"Para duplicarlo usa Copiar/Pegar."
+                )
+        # Extraer el Hijo del origen
+        hijo_obj: Optional[Hijo] = None
+        for i, h in enumerate(origen.hijos):
+            if h.codigo_hijo == codigo:
+                hijo_obj = origen.hijos.pop(i)
+                break
+        if hijo_obj is None:
+            raise ValueError(f"'{codigo}' no encontrado en '{padre_origen}'")
+        # Insertar en destino
+        if antes_de is None:
+            destino.hijos.append(hijo_obj)
+        else:
+            idx = next(
+                (i for i, h in enumerate(destino.hijos) if h.codigo_hijo == antes_de),
+                len(destino.hijos)
+            )
+            destino.hijos.insert(idx, hijo_obj)
+        # Transferir la medición al nuevo padre (la clave del dict es el código del padre)
+        if padre_destino != padre_origen:
+            concepto = self.conceptos.get(codigo)
+            if concepto:
+                med = concepto.mediciones.pop(padre_origen, None)
+                if med is not None:
+                    concepto.mediciones[padre_destino] = med
+
+    def _es_descendiente(self, candidato: str, raiz: str) -> bool:
+        """Devuelve True si candidato es hijo (directo o indirecto) de raiz."""
+        c = self.conceptos.get(raiz)
+        if c is None:
+            return False
+        for h in c.hijos:
+            if h.codigo_hijo == candidato:
+                return True
+            if self._es_descendiente(candidato, h.codigo_hijo):
+                return True
+        return False
 
     def _importe_recursivo(self, codigo: str, codigo_padre: str) -> float:
         concepto = self.conceptos.get(codigo)
