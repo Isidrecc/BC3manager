@@ -398,6 +398,36 @@ class Presupuesto:
             raise ValueError(f"Concepto '{codigo}' no encontrado")
         c.texto = texto
 
+    def cambiar_tipo(self, codigo: str, nuevo_tipo: str) -> None:
+        """Cambia el tipo de un concepto entre 'capitulo' y 'partida'.
+
+        La estructura de hijos no se modifica; solo cambia cómo se
+        calcula el importe y cómo se muestra en la interfaz.
+        """
+        c = self.conceptos.get(codigo)
+        if c is None:
+            raise ValueError(f"Concepto '{codigo}' no encontrado")
+        if nuevo_tipo == "capitulo":
+            c.tipo = TipoConcepto.CAPITULO
+            c._tipo_fiebdc = "5"  # type: ignore[attr-defined]
+        elif nuevo_tipo == "partida":
+            c.tipo = TipoConcepto.PARTIDA
+            c._tipo_fiebdc = "6"  # type: ignore[attr-defined]
+        else:
+            raise ValueError(f"Tipo '{nuevo_tipo}' no válido. Use 'capitulo' o 'partida'")
+
+    def cambiar_tipo_recurso(self, codigo: str, tipo_fiebdc: str) -> None:
+        """Cambia el subtipo de un recurso unitario.
+
+        tipo_fiebdc:  '1' MO  |  '2' Maquinaria  |  '3' Material  |  '4' Auxiliar
+        """
+        c = self.conceptos.get(codigo)
+        if c is None:
+            raise ValueError(f"Concepto '{codigo}' no encontrado")
+        if tipo_fiebdc not in ("1", "2", "3", "4"):
+            raise ValueError(f"Subtipo FIEBDC '{tipo_fiebdc}' no válido (1-4)")
+        c._tipo_fiebdc = tipo_fiebdc  # type: ignore[attr-defined]
+
     def modificar_unidad(self, codigo: str, unidad: str) -> None:
         """Cambia la unidad de medida de un concepto."""
         c = self.conceptos.get(codigo)

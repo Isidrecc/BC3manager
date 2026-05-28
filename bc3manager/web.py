@@ -39,7 +39,7 @@ def _arbol_json(p: Presupuesto) -> list[dict]:
                 rec = p.get(h.codigo_hijo)
                 if rec:
                     recursos.append({"codigo": rec.codigo, "unidad": rec.unidad, "resumen": rec.resumen,
-                        "texto": rec.texto,
+                        "tipo_fiebdc": getattr(rec, "_tipo_fiebdc", "3"),
                         "precio": rec.precio, "precio_fmt": _fmt(rec.precio, 4),
                         "rendimiento": h.rendimiento, "rendimiento_fmt": _fmt(h.rendimiento, 4),
                         "importe": round(rec.precio * h.cantidad, 4),
@@ -52,7 +52,8 @@ def _arbol_json(p: Presupuesto) -> list[dict]:
                     "longitud": ln.longitud, "anchura": ln.anchura, "altura": ln.altura,
                     "subtotal": round(ln.subtotal, 3), "subtotal_fmt": _fmt(ln.subtotal, 3)})
         return {"codigo": c.codigo, "unidad": c.unidad, "resumen": c.resumen, "texto": c.texto,
-            "tipo": c.tipo.value, "precio": c.precio, "precio_fmt": _fmt(c.precio, 2),
+            "tipo": c.tipo.value, "tipo_fiebdc": getattr(c, "_tipo_fiebdc", ""),
+            "precio": c.precio, "precio_fmt": _fmt(c.precio, 2),
             "medicion": med_total, "medicion_fmt": _fmt(med_total, 2),
             "importe": importe, "importe_fmt": _fmt(importe, 2),
             "hijos": hijos_data, "recursos": recursos, "lineas_medicion": lineas_med,
@@ -222,8 +223,10 @@ def api_editar():
                           d.get("unidad", ""), d.get("resumen", ""))
         elif accion == "eliminar_recurso":
             p.eliminar_recurso(d["codigo_partida"], d["codigo_recurso"])
-        elif accion == "texto":
-            p.modificar_texto(d["codigo"], d["valor"])
+        elif accion == "cambiar_tipo":
+            p.cambiar_tipo(d["codigo"], d["tipo"])
+        elif accion == "tipo_recurso":
+            p.cambiar_tipo_recurso(d["codigo"], d["tipo_fiebdc"])
         elif accion == "mover":
             p.mover_concepto(d["codigo"], d["padre_origen"], d["padre_destino"],
                              d.get("antes_de"))   # antes_de puede ser None → append
@@ -325,12 +328,18 @@ button{cursor:pointer;font-family:inherit}
 .detail-meta-value{font-size:15px;font-weight:600}.detail-meta-value.green{color:var(--green)}
 .detail-section{margin-top:20px}.detail-section h3{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:10px}
 .detail-text{font-size:13px;line-height:1.6;color:var(--text-dim);background:var(--bg-card);padding:12px 16px;border-radius:var(--radius);border:1px solid var(--border)}
-.detail-text-editor{font-size:13px;line-height:1.6;color:var(--text-dim);background:var(--bg-card);padding:12px 16px;border-radius:var(--radius);border:1px solid var(--border);white-space:pre-wrap;cursor:text;min-height:64px;outline:none;transition:border-color .15s}
-.detail-text-editor:focus{border-color:var(--accent)}
-.detail-text-editor:empty::before{content:attr(placeholder);color:var(--text-muted);font-style:italic;pointer-events:none}
-.detail-breadcrumb{font-size:11px;color:var(--text-muted);margin-bottom:8px;display:flex;align-items:center;gap:6px}
-.detail-breadcrumb a{color:var(--accent);cursor:pointer;text-decoration:none}
-.detail-breadcrumb a:hover{text-decoration:underline}
+/* Selector de tipo (Cap/Part en árbol; MO/MQ/MT/AUX en desglose) */
+.tt-badge.clickable{cursor:pointer}
+.tt-badge.clickable:hover{opacity:.75}
+.tipo-dropdown{position:absolute;z-index:200;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:4px;min-width:90px}
+.tipo-dropdown-item{padding:5px 10px;cursor:pointer;border-radius:4px;font-size:12px;white-space:nowrap}
+.tipo-dropdown-item:hover{background:var(--bg-hover)}
+.tipo-dropdown-item.active{font-weight:700;color:var(--accent)}
+/* Colores por subtipo de recurso */
+.badge-mo{background:rgba(240,180,41,.18);color:var(--amber)}
+.badge-mq{background:var(--accent-soft);color:var(--accent)}
+.badge-mt{background:var(--green-soft);color:var(--green)}
+.badge-aux{background:rgba(180,120,220,.15);color:#b48adf}
 .dtable{width:100%;border-collapse:collapse;font-size:12px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
 .dtable th{background:var(--bg-card);text-align:left;padding:8px 10px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.3px;color:var(--text-dim);border-bottom:1px solid var(--border)}
 .dtable td{padding:5px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
@@ -390,7 +399,7 @@ button{cursor:pointer;font-family:inherit}
 <div id="loadingOverlay" style="display:none;position:fixed;inset:0;background:rgba(15,17,23,.85);z-index:200"><div class="loading" style="height:100%"><div class="spinner"></div><span>Leyendo BC3...</span></div></div>
 
 <script>
-let treeData=[], fileInfo={}, curNode=null, curParent='', _curResource=null;
+let treeData=[], fileInfo={}, curNode=null, curParent='';
 
 // ---- Upload ----
 function uploadFile(input){const f=input.files[0];if(f)sendFile(f)}
@@ -414,23 +423,7 @@ async function api(data){
 }
 function refresh(j){
   if(!j)return;fileInfo=j.info;treeData=j.arbol;renderStats();renderTree();
-  if(curNode){
-    const f=findNode(treeData,curNode.codigo);
-    if(f){
-      curNode=f;
-      // Si estábamos viendo el detalle de un recurso, restaurar esa vista
-      if(_curResource){
-        const rec=f.recursos&&f.recursos.find(r=>r.codigo===_curResource);
-        if(rec){renderDetailUnitario(rec,f.codigo);return;}
-        _curResource=null;
-      }
-      renderDetail(f);
-    }else{
-      curNode=null;_curResource=null;
-      if(_pasteHandler){document.removeEventListener('paste',_pasteHandler);_pasteHandler=null}
-      document.getElementById('detailPanel').innerHTML='<div class="detail-empty">Concepto eliminado</div>';
-    }
-  }
+  if(curNode){const f=findNode(treeData,curNode.codigo);if(f){curNode=f;renderDetail(f)}else{curNode=null;if(_pasteHandler){document.removeEventListener('paste',_pasteHandler);_pasteHandler=null}document.getElementById('detailPanel').innerHTML='<div class="detail-empty">Concepto eliminado</div>'}}
   const undoBtn=document.getElementById('undoBtn');
   if(undoBtn)undoBtn.style.display=(j.undo_disponible?'':'none');
 }
@@ -547,7 +540,13 @@ function mkTreeRow(nodo,level,parentCod){
   const pad=level*16;
   const toggleHtml=`<span class="tt-toggle ${hasKids?'':'leaf'}${isOpen?' open':''}" data-act="toggle">▶</span>`;
   const indentHtml=`<span class="tt-indent" style="width:${pad}px"></span>`;
-  const badgeHtml=`<span class="tt-badge ${isCap?'badge-cap':'badge-part'}">${isCap?'Cap':'Part'}</span>`;
+  const TIPOS_ARBOL=[{value:'capitulo',label:'Cap'},{value:'partida',label:'Part'}];
+  const badgeHtml=ecSelect(
+    isCap?'capitulo':'partida',
+    TIPOS_ARBOL,
+    v=>api({accion:'cambiar_tipo',codigo:nodo.codigo,tipo:v}).then(refresh),
+    isCap?'badge-cap':'badge-part'
+  );
 
   // Cantidad: capítulo -> "1" no editable; partida con líneas -> total no editable; partida sin líneas -> editable
   const numLineas=nodo.lineas_medicion?nodo.lineas_medicion.length:0;
@@ -595,7 +594,7 @@ function mkTreeRow(nodo,level,parentCod){
     curNode=nodo; curParent=parentCod;
     if(sameNode) return;
     if(isCap){
-      renderDetailCapitulo(nodo);
+      renderDetail(nodo);
       if(hasKids) toggleCap(nodo.codigo);
     }else{
       renderDetail(nodo);
@@ -753,73 +752,65 @@ function ecKey(e,el){
   }
 }
 
+// ---- ecSelect: badge con desplegable de opciones (doble clic) ----
+// options: [{value, label}]   extraClass: clase CSS extra del badge (badge-cap, badge-mo, ...)
+function ecSelect(val, options, saveCallback, extraClass){
+  const id='ecs'+Math.random().toString(36).substr(2,6);
+  window['_ecs_'+id]={cb:saveCallback, opts:options};
+  const cur=options.find(o=>o.value===val)||options[0];
+  return `<span class="tt-badge ${extraClass||''} clickable" id="${id}"
+    title="Doble clic para cambiar tipo" data-val="${esc(String(val))}" data-extra="${esc(extraClass||'')}"
+    ondblclick="event.stopPropagation();ecSelectActivate('${id}')">${esc(cur.label)}</span>`;
+}
+
+function ecSelectActivate(id){
+  const el=document.getElementById(id);
+  if(!el||!window['_ecs_'+id])return;
+  // Cerrar cualquier otro desplegable abierto
+  document.querySelectorAll('.tipo-dropdown').forEach(d=>d.remove());
+  const{cb,opts}=window['_ecs_'+id];
+  const currentVal=el.dataset.val;
+  const dd=document.createElement('div');
+  dd.className='tipo-dropdown';
+  const rect=el.getBoundingClientRect();
+  dd.style.cssText=`position:fixed;top:${rect.bottom+2}px;left:${rect.left}px`;
+  // Mapa de label → clase badge para actualizar el color al seleccionar
+  const BADGE_CLS={Cap:'badge-cap',Part:'badge-part',MO:'badge-mo',MQ:'badge-mq',MT:'badge-mt',AUX:'badge-aux'};
+  opts.forEach(o=>{
+    const item=document.createElement('div');
+    item.className='tipo-dropdown-item'+(o.value===currentVal?' active':'');
+    item.textContent=o.label;
+    item.addEventListener('click',e=>{
+      e.stopPropagation();
+      dd.remove();
+      el.textContent=o.label;
+      el.dataset.val=o.value;
+      // Actualizar clase de color del badge
+      const newCls=BADGE_CLS[o.label]||el.dataset.extra||'';
+      el.className=el.className.replace(/badge-\w+/g,'').replace(/\s+/g,' ').trim();
+      if(newCls)el.classList.add(newCls);
+      el.dataset.extra=newCls;
+      cb(o.value);
+    });
+    dd.appendChild(item);
+  });
+  document.body.appendChild(dd);
+  setTimeout(()=>{
+    document.addEventListener('click',function h(e){
+      if(!dd.contains(e.target)){dd.remove();document.removeEventListener('click',h)}
+    });
+  },0);
+}
+
 // ---- Parse number from cell ----
 function parseNum(s){return parseFloat(String(s).replace(/\./g,'').replace(',','.'))||0}
 
-// ---- Texto largo editable (compartido por capítulos, partidas y unitarios) ----
-// El texto se establece via textContent DESPUÉS de panel.innerHTML para manejar \n correctamente.
-function _setupTexto(panel, cod, textoOrig){
-  const te=panel.querySelector('.detail-text-editor');
-  if(!te)return;
-  te.textContent=textoOrig||'';
-  te.addEventListener('blur',()=>{
-    const val=te.innerText.replace(/\r\n/g,'\n').replace(/\r/g,'\n');
-    if(val!==textoOrig){textoOrig=val;api({accion:'texto',codigo:cod,valor:val}).then(refresh)}
-  });
-  te.addEventListener('keydown',e=>{
-    if(e.key==='Escape'){te.textContent=textoOrig||'';te.blur()}
-    // Tab y Enter funcionan normalmente en textos largos
-  });
-}
-
-// ---- Render detail — capítulo ----
-function renderDetailCapitulo(nodo){
-  _curResource=null;
-  if(_pasteHandler){document.removeEventListener('paste',_pasteHandler);_pasteHandler=null}
-  const panel=document.getElementById('detailPanel');
-  const cod=nodo.codigo;
-  let h=`<div class="detail-header">
-    <div class="detail-code">${ec(cod,true,v=>api({accion:'codigo',codigo_viejo:cod,codigo_nuevo:v.trim()}).then(refresh),false)}</div>
-    <div class="detail-name">${ec(nodo.resumen,true,v=>api({accion:'resumen',codigo:cod,valor:v}).then(refresh),false)}</div>
-    <div class="detail-meta">
-      <div class="detail-meta-item"><span class="detail-meta-label">Importe</span><span class="detail-meta-value green">${esc(nodo.importe_fmt)} €</span></div>
-    </div></div>`;
-  h+=`<div class="detail-section"><h3>Descripción larga</h3>
-    <div class="detail-text-editor" contenteditable="true" spellcheck="false"
-      placeholder="Sin descripción — haz clic para añadir…"></div></div>`;
-  panel.innerHTML=h;
-  _setupTexto(panel,cod,nodo.texto||'');
-}
-
-// ---- Render detail — unitario (recurso de desglose) ----
-function renderDetailUnitario(r, codPartida){
-  _curResource=r.codigo;
-  if(_pasteHandler){document.removeEventListener('paste',_pasteHandler);_pasteHandler=null}
-  const panel=document.getElementById('detailPanel');
-  let h=`<div class="detail-breadcrumb">
-    <a onclick="_curResource=null;renderDetail(curNode)">← ${esc(codPartida)}</a>
-    <span>/ recurso</span></div>`;
-  h+=`<div class="detail-header">
-    <div class="detail-code">${ec(r.codigo,true,v=>api({accion:'codigo',codigo_viejo:r.codigo,codigo_nuevo:v.trim()}).then(refresh),false)}</div>
-    <div class="detail-name">${ec(r.resumen,true,v=>api({accion:'resumen',codigo:r.codigo,valor:v}).then(refresh),false)}</div>
-    <div class="detail-meta">
-      <div class="detail-meta-item"><span class="detail-meta-label">Unidad</span><span class="detail-meta-value">${ec(r.unidad,true,v=>api({accion:'unidad',codigo:r.codigo,valor:v}).then(refresh),false)}</span></div>
-      <div class="detail-meta-item"><span class="detail-meta-label">Precio</span><span class="detail-meta-value">${ec(r.precio_fmt,true,v=>api({accion:'precio',codigo:r.codigo,valor:parseNum(v)}).then(refresh),true)} €</span></div>
-    </div></div>`;
-  h+=`<div class="detail-section"><h3>Descripción larga</h3>
-    <div class="detail-text-editor" contenteditable="true" spellcheck="false"
-      placeholder="Sin descripción — haz clic para añadir…"></div></div>`;
-  panel.innerHTML=h;
-  _setupTexto(panel,r.codigo,r.texto||'');
-}
-
-// ---- Render detail — partida ----
+// ---- Render detail (partidas) ----
 function renderDetail(nodo){
-  _curResource=null;
   const panel=document.getElementById('detailPanel');
   if(nodo.tipo==='capitulo'){
     if(_pasteHandler){document.removeEventListener('paste',_pasteHandler);_pasteHandler=null}
-    renderDetailCapitulo(nodo);
+    panel.innerHTML='<div class="detail-empty">Selecciona una partida</div>';
     return;
   }
   const pc=curParent;
@@ -832,49 +823,52 @@ function renderDetail(nodo){
       <div class="detail-meta-item"><span class="detail-meta-label">Unidad</span><span class="detail-meta-value">${ec(nodo.unidad,true,v=>api({accion:'unidad',codigo:cod,valor:v}).then(refresh),false)}</span></div>
       <div class="detail-meta-item"><span class="detail-meta-label">Cantidad</span><span class="detail-meta-value">
         ${nodo.lineas_medicion&&nodo.lineas_medicion.length>0
-          ? `<span class="ecell" contenteditable="false" title="Calculada desde las líneas de medición" style="cursor:default;opacity:.7">${esc(nodo.medicion_fmt||'0,00')}</span> <span title="No editable directamente" style="font-size:11px;color:var(--text-muted)">🔒</span>`
+          ? `<span class="ecell" contenteditable="false" title="Cantidad calculada desde las líneas de medición — edítalas abajo" style="cursor:default;opacity:.7">${esc(nodo.medicion_fmt||'0,00')}</span> <span title="Calculada desde las mediciones — no editable directamente" style="font-size:11px;color:var(--text-muted)">🔒</span>`
           : `${ec(nodo.medicion_fmt||'0,00',true,v=>setCantidadSimple(cod,pc,parseNum(v)).then(refresh),true)}`
         }
       </span></div>
       <div class="detail-meta-item"><span class="detail-meta-label">Precio</span><span class="detail-meta-value">
         ${nodo.recursos&&nodo.recursos.length>0
-          ? `<span class="ecell" contenteditable="false" title="Calculado desde la descomposición" style="cursor:default;opacity:.7">${esc(nodo.precio_fmt)}</span> € <span style="font-size:11px;color:var(--text-muted)">🔒</span>`
+          ? `<span class="ecell" contenteditable="false" title="Precio calculado desde la descomposición — edita los rendimientos o precios unitarios" style="cursor:default;opacity:.7">${esc(nodo.precio_fmt)}</span> € <span title="Precio calculado — no editable directamente" style="font-size:11px;color:var(--text-muted)">🔒</span>`
           : `${ec(nodo.precio_fmt,true,v=>api({accion:'precio',codigo:cod,valor:parseNum(v)}).then(refresh),true)} €`
         }
       </span></div>
       <div class="detail-meta-item"><span class="detail-meta-label">Importe</span><span class="detail-meta-value green">${esc(nodo.importe_fmt)} €</span></div>
     </div></div>`;
 
-  // Texto largo — editable
-  h+=`<div class="detail-section"><h3>Descripción larga</h3>
-    <div class="detail-text-editor" contenteditable="true" spellcheck="false"
-      placeholder="Sin descripción — haz clic para añadir…"></div></div>`;
+  // Texto (descripción larga)
+  h+=`<div class="detail-section"><h3>Descripción</h3>`;
+  if(nodo.texto){h+=`<div class="detail-text">${esc(nodo.texto)}</div>`}
+  else{h+=`<div class="detail-text" style="color:var(--text-muted);font-style:italic">Sin descripción.</div>`}
+  h+=`</div>`;
 
   // Descomposición
   {
+    const TIPO_REC=[{v:'1',label:'MO',cls:'badge-mo'},{v:'2',label:'MQ',cls:'badge-mq'},{v:'3',label:'MT',cls:'badge-mt'},{v:'4',label:'AUX',cls:'badge-aux'}];
     h+=`<div class="detail-section"><h3>Descomposición</h3><table class="dtable">
-      <tr><th>Código</th><th>Descripción</th><th>Ud</th><th class="num">Rendimiento</th><th class="num">Precio</th><th class="num">Importe</th><th></th></tr>`;
+      <tr><th>Código</th><th>Tipo</th><th>Descripción</th><th>Ud</th><th class="num">Rendimiento</th><th class="num">Precio</th><th class="num">Importe</th><th></th></tr>`;
     if(nodo.recursos&&nodo.recursos.length>0){
       nodo.recursos.forEach(r=>{
+        const tf=r.tipo_fiebdc||'3';
+        const ti=TIPO_REC.find(x=>x.v===tf)||TIPO_REC[2];
+        const tipoBadge=ecSelect(tf,TIPO_REC.map(x=>({value:x.v,label:x.label})),
+          v=>api({accion:'tipo_recurso',codigo:r.codigo,tipo_fiebdc:v}).then(refresh),ti.cls);
         h+=`<tr>
           <td>${ec(r.codigo,true,v=>api({accion:'codigo',codigo_viejo:r.codigo,codigo_nuevo:v.trim()}).then(refresh),false)}</td>
+          <td>${tipoBadge}</td>
           <td>${ec(r.resumen,true,v=>api({accion:'resumen',codigo:r.codigo,valor:v}).then(refresh),false)}</td>
           <td>${ec(r.unidad,true,v=>api({accion:'unidad',codigo:r.codigo,valor:v}).then(refresh),false)}</td>
           <td class="num">${ec(r.rendimiento_fmt,true,v=>api({accion:'rendimiento',codigo_padre:cod,codigo_hijo:r.codigo,valor:parseNum(v)}).then(refresh),true)}</td>
           <td class="num">${ec(r.precio_fmt,true,v=>api({accion:'precio',codigo:r.codigo,valor:parseNum(v)}).then(refresh),true)} €</td>
           <td class="num" style="color:var(--green)">${esc(r.importe_fmt)} €</td>
-          <td style="white-space:nowrap">
-            <button class="btn btn-sm" title="Ver/editar ficha del recurso"
-              onclick="event.stopPropagation();renderDetailUnitario(curNode.recursos.find(x=>x.codigo==='${esc(r.codigo)}'),'${esc(cod)}')">→</button>
-            <button class="btn btn-sm btn-danger" title="Quitar de la descomposición"
-              onclick="event.stopPropagation();api({accion:'eliminar_recurso',codigo_partida:'${esc(cod)}',codigo_recurso:'${esc(r.codigo)}'}).then(refresh)">×</button>
-          </td></tr>`;
+          <td><button class="btn btn-sm btn-danger" title="Quitar recurso"
+            onclick="api({accion:'eliminar_recurso',codigo_partida:'${esc(cod)}',codigo_recurso:'${esc(r.codigo)}'}).then(refresh)">×</button></td></tr>`;
       });
-      h+=`<tr class="total-row"><td colspan="5">Coste unitario</td><td class="num">${esc(nodo.precio_fmt)} €</td><td></td></tr>`;
+      h+=`<tr class="total-row"><td colspan="6">Coste unitario</td><td class="num">${esc(nodo.precio_fmt)} €</td><td></td></tr>`;
     }
     h+=`<tr class="ghost-row" style="cursor:default">
       <td>${ec('',true,v=>{const c=(v||'').trim();if(!c)return;api({accion:'add_recurso',codigo_partida:cod,codigo_recurso:c,rendimiento:1,precio:0,unidad:'',resumen:''}).then(refresh)},false)}</td>
-      <td colspan="5" style="color:var(--text-muted);font-style:italic;font-size:11px;padding:5px 10px">doble clic en código para añadir recurso</td>
+      <td colspan="6" style="color:var(--text-muted);font-style:italic;font-size:11px;padding:5px 10px">doble clic en código para añadir recurso</td>
       <td></td></tr>`;
     h+=`</table></div>`;
   }
@@ -915,7 +909,6 @@ function renderDetail(nodo){
     h+=`</table></div>`;
   }
   panel.innerHTML=h;
-  _setupTexto(panel,cod,nodo.texto||'');
   _instalarPasteHandler(cod,pc);
 }
 
