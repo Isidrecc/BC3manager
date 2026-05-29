@@ -232,6 +232,8 @@ def api_editar():
                           d.get("unidad", ""), d.get("resumen", ""))
         elif accion == "eliminar_recurso":
             p.eliminar_recurso(d["codigo_partida"], d["codigo_recurso"])
+        elif accion == "texto":
+            p.modificar_texto(d["codigo"], d["valor"])
         elif accion == "cambiar_tipo":
             p.cambiar_tipo(d["codigo"], d["tipo"])
         elif accion == "tipo_recurso":
@@ -339,7 +341,9 @@ button{cursor:pointer;font-family:inherit}
 .detail-meta-label{font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px}
 .detail-meta-value{font-size:15px;font-weight:600}.detail-meta-value.green{color:var(--green)}
 .detail-section{margin-top:20px}.detail-section h3{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);margin-bottom:10px}
-.detail-text{font-size:13px;line-height:1.6;color:var(--text-dim);background:var(--bg-card);padding:12px 16px;border-radius:var(--radius);border:1px solid var(--border)}
+.detail-text{font-size:13px;line-height:1.6;color:var(--text-dim);background:var(--bg-card);padding:12px 16px;border-radius:var(--radius);border:1px solid var(--border);white-space:pre-wrap;word-break:break-word;min-height:48px;cursor:text;transition:border-color .15s,outline .15s}
+.detail-text:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:var(--accent);color:var(--text)}
+.detail-text:empty:before{content:attr(data-placeholder);color:var(--text-muted);font-style:italic;pointer-events:none}
 /* Selector de tipo (Cap/Part en árbol; MO/MQ/MT/AUX en desglose) */
 .tt-badge.clickable{cursor:pointer}
 .tt-badge.clickable:hover{opacity:.75}
@@ -445,12 +449,35 @@ async function api(data){
 }
 function refresh(j){
   if(!j)return;
+  // Capturar la celda con foco ANTES de destruir el DOM (Tab/Enter habrán ya movido el foco a la siguiente celda)
+  const savedFocus=_captureFocusPos();
   fileInfo=j.info;treeData=j.arbol;
-  // Actualizar undo ANTES de renderizar (evita que un error de render oculte el botón)
   const undoBtn=document.getElementById('undoBtn');
   if(undoBtn)undoBtn.style.display=(j.undo_disponible?'':'none');
   renderStats();renderTree();
   if(curNode){const f=findNode(treeData,curNode.codigo);if(f){curNode=f;renderDetail(f)}else{curNode=null;if(_pasteHandler){document.removeEventListener('paste',_pasteHandler);_pasteHandler=null}document.getElementById('detailPanel').innerHTML='<div class="detail-empty">Concepto eliminado</div>'}}
+  // Restaurar foco en la celda equivalente del nuevo DOM
+  if(savedFocus)_restoreFocusPos(savedFocus);
+}
+
+// Captura {rowKey, colIdx} del activeElement si es una celda editable
+function _captureFocusPos(){
+  const el=document.activeElement;
+  if(!el||!el.classList||!el.classList.contains('ecell'))return null;
+  const tr=el.closest('tr');
+  if(!tr||!tr.dataset.rowKey)return null;
+  const cells=[...tr.querySelectorAll('.ecell[data-editable=true]')];
+  const ci=cells.indexOf(el);
+  if(ci<0)return null;
+  return {rowKey:tr.dataset.rowKey,colIdx:ci};
+}
+// Activa la celda equivalente tras un re-render
+function _restoreFocusPos(pos){
+  const tr=document.querySelector(`[data-row-key="${CSS.escape(pos.rowKey)}"]`);
+  if(!tr)return;
+  const cells=[...tr.querySelectorAll('.ecell[data-editable=true]')];
+  const tgt=cells[pos.colIdx]||cells[cells.length-1];
+  if(tgt)ecActivate(tgt);
 }
 function findNode(nodes,cod){for(const n of nodes){if(n.codigo===cod)return n;if(n.hijos){const f=findNode(n.hijos,cod);if(f)return f}}return null}
 
@@ -536,27 +563,12 @@ function mkGhostTreeRow(codigoPadre,level){
   const tr=document.createElement('tr');
   tr.className='ghost-row';
   tr.dataset.ghostParent=codigoPadre||'';
+  tr.dataset.rowKey=`t-ghost:${codigoPadre||''}`;
   const pad=level*16;
   const indentHtml=`<span class="tt-indent" style="width:${pad}px"></span>`;
 
-  // Borrador acumulado hasta que el usuario pulsa Intro
+  // Borrador acumulado hasta que el usuario confirma
   const draft={codigo:'',resumen:'',unidad:'',precio:0};
-  let committing=false;
-
-  function ghostCommit(){
-    if(committing)return;
-    const cod=draft.codigo.trim();
-    if(!cod)return;
-    committing=true;
-    openCaps.add(codigoPadre);
-    api(cod.endsWith('#')
-      ?{accion:'add_capitulo',codigo:cod,resumen:draft.resumen,codigo_padre:codigoPadre}
-      :{accion:'add_partida',codigo_padre:codigoPadre,codigo:cod,
-        unidad:draft.unidad,resumen:draft.resumen,precio:draft.precio}
-    ).then(refresh);
-  }
-
-  // Cada ec solo guarda en borrador (sin crear el concepto)
   const codHtml=ec('',true,v=>{draft.codigo=(v||'').trim();},false);
   const resHtml=ec('',true,v=>{draft.resumen=(v||'').trim();},false);
   const udHtml =ec('',true,v=>{draft.unidad =(v||'').trim();},false);
@@ -574,36 +586,15 @@ function mkGhostTreeRow(codigoPadre,level){
     `<td class="num col-imp"><span class="ecell num"></span></td>`+
     `<td class="col-act" style="color:var(--text-muted);font-size:10px;padding-right:6px;text-align:right">↵ Intro</td>`;
 
-  // Reemplazar el keydown de cada celda: Tab navega dentro de la ghost row, Enter crea
-  const cells=[...tr.querySelectorAll('.ecell[data-editable=true]')];
-  cells.forEach((el,idx)=>{
-    el.onkeydown=function(e){
-      // Enter funciona también si la celda solo tiene foco (no está en edición activa)
-      if(e.key==='Enter'){
-        e.preventDefault();
-        if(el.contentEditable==='true') el.blur();  // dispara ecBlur → guarda en draft
-        ghostCommit();
-        return;
-      }
-      if(el.contentEditable!=='true')return;  // resto solo si está en edición
-      if(e.key==='Tab'){
-        e.preventDefault();
-        el.blur();  // guarda en draft vía ecBlur
-        const tgt=e.shiftKey?cells[idx-1]:cells[idx+1];
-        if(tgt)ecActivate(tgt);
-        return;
-      }
-      if(e.key==='Escape'){
-        e.preventDefault();
-        el.dataset.cancelling='true';
-        el.textContent=el.dataset.orig||'';
-        el.contentEditable='false';
-        el.title='Doble clic para editar';
-        el.blur();
-        delete el.dataset.cancelling;
-        return;
-      }
-    };
+  _wireGhostRow(tr,()=>{
+    const cod=draft.codigo.trim();
+    if(!cod)return;
+    openCaps.add(codigoPadre);
+    api(cod.endsWith('#')
+      ?{accion:'add_capitulo',codigo:cod,resumen:draft.resumen,codigo_padre:codigoPadre}
+      :{accion:'add_partida',codigo_padre:codigoPadre,codigo:cod,
+        unidad:draft.unidad,resumen:draft.resumen,precio:draft.precio}
+    ).then(refresh);
   });
 
   // La fila fantasma también es zona de drop: soltar aquí → append al capítulo padre
@@ -632,6 +623,7 @@ function mkTreeRow(nodo,level,parentCod){
   tr.className='row-'+(isCap?'cap':'part');
   if(curNode && curNode.codigo===nodo.codigo && curParent===parentCod) tr.classList.add('active');
   tr._nodoData=nodo;tr._parentCod=parentCod;
+  tr.dataset.rowKey=`t:${parentCod}>${nodo.codigo}`;
 
   // Sangría (16px por nivel) + toggle ▶
   const pad=level*16;
@@ -807,6 +799,52 @@ function ecBlur(el,id){
   if(window['_ec_'+id])window['_ec_'+id](el.textContent);
 }
 
+// Conecta una "ghost row" (fila para añadir un nuevo registro) con sus comportamientos:
+//   - Tab/Shift+Tab navegan entre las celdas de la fila sin crear nada.
+//   - Tab desde la ÚLTIMA celda → commit.
+//   - Enter en cualquier celda → commit.
+//   - Foco fuera de toda la fila → commit.
+//   - Escape → cancela la edición de la celda.
+// commitFn se invoca sin parámetros; debe leer su propio borrador y enviar la petición.
+function _wireGhostRow(tr,commitFn){
+  let _done=false;
+  const fire=()=>{if(_done)return;_done=true;commitFn();};
+  const cells=[...tr.querySelectorAll('.ecell[data-editable=true]')];
+  cells.forEach((el,idx)=>{
+    el.onkeydown=function(e){
+      if(e.key==='Enter'){
+        e.preventDefault();
+        if(el.contentEditable==='true')el.blur();   // dispara ecBlur → guarda en borrador
+        fire();
+        return;
+      }
+      if(el.contentEditable!=='true')return;
+      if(e.key==='Tab'){
+        e.preventDefault();el.blur();
+        const tgt=e.shiftKey?cells[idx-1]:cells[idx+1];
+        if(tgt){ecActivate(tgt);}
+        else if(!e.shiftKey){fire();}   // Tab desde la última celda → commit
+        return;
+      }
+      if(e.key==='Escape'){
+        e.preventDefault();
+        el.dataset.cancelling='true';
+        el.textContent=el.dataset.orig||'';
+        el.contentEditable='false';
+        el.title='Doble clic para editar';
+        el.blur();
+        delete el.dataset.cancelling;
+      }
+    };
+  });
+  tr.addEventListener('focusout',()=>{
+    setTimeout(()=>{
+      if(!tr.isConnected||tr.contains(document.activeElement))return;
+      fire();
+    },50);
+  });
+}
+
 function ecKey(e,el){
   if(el.contentEditable!=='true')return;
 
@@ -820,16 +858,27 @@ function ecKey(e,el){
     delete el.dataset.cancelling;
     return;
   }
-  if(e.key==='Enter'){
-    e.preventDefault();el.blur();
-    return;
-  }
 
   // Helpers: celdas editables de la fila actual y de la tabla actual
   const _tr=el.closest('tr');
   const _table=el.closest('table');
   const _rowCells=()=>_tr?[..._tr.querySelectorAll('.ecell[data-editable=true]')]:[];
   const _tableRows=()=>_table?[..._table.querySelectorAll('tr')].filter(r=>r.querySelector('.ecell[data-editable=true]')):[];
+
+  // Enter → mueve a la celda de abajo (estilo Excel)
+  if(e.key==='Enter'){
+    e.preventDefault();
+    const rc=_rowCells();const ci=rc.indexOf(el);
+    const rows=_tableRows();const ri=rows.indexOf(_tr);
+    const tgtRow=rows[ri+1];
+    el.blur();   // guarda valor → puede disparar refresh; el foco se restaura por _restoreFocusPos
+    if(tgtRow){
+      const tc=[...tgtRow.querySelectorAll('.ecell[data-editable=true]')];
+      const tgt=tc[ci]||tc[tc.length-1];
+      if(tgt)ecActivate(tgt);
+    }
+    return;
+  }
 
   if(e.key==='Tab'){
     e.preventDefault();el.blur();
@@ -965,10 +1014,11 @@ function renderDetail(nodo){
     </div></div>`;
 
   // Texto (descripción larga)
-  h+=`<div class="detail-section"><h3>Descripción</h3>`;
-  if(nodo.texto){h+=`<div class="detail-text">${esc(nodo.texto)}</div>`}
-  else{h+=`<div class="detail-text" style="color:var(--text-muted);font-style:italic">Sin descripción.</div>`}
-  h+=`</div>`;
+  h+=`<div class="detail-section"><h3>Descripción</h3>
+    <div class="detail-text" id="detailTexto" contenteditable="true"
+      data-placeholder="Haz clic para añadir una descripción detallada…"
+      data-orig="${esc(nodo.texto||'')}"
+    >${esc(nodo.texto||'')}</div></div>`;
 
   // Descomposición
   {
@@ -981,7 +1031,7 @@ function renderDetail(nodo){
         const ti=TIPO_REC.find(x=>x.v===tf)||TIPO_REC[2];
         const tipoBadge=ecSelect(tf,TIPO_REC.map(x=>({value:x.v,label:x.label})),
           v=>api({accion:'tipo_recurso',codigo:r.codigo,tipo_fiebdc:v}).then(refresh),ti.cls);
-        h+=`<tr>
+        h+=`<tr data-row-key="d:${esc(cod)}:${esc(r.codigo)}">
           <td>${ec(r.codigo,true,v=>api({accion:'codigo',codigo_viejo:r.codigo,codigo_nuevo:v.trim()}).then(refresh),false)}</td>
           <td>${tipoBadge}</td>
           <td>${ec(r.resumen,true,v=>api({accion:'resumen',codigo:r.codigo,valor:v}).then(refresh),false)}</td>
@@ -994,11 +1044,20 @@ function renderDetail(nodo){
       });
       h+=`<tr class="total-row"><td colspan="6">Coste unitario</td><td class="num">${esc(nodo.precio_fmt)} €</td><td></td></tr>`;
     }
-    h+=`<tr class="ghost-row" style="cursor:default">
-      <td>${ec('',true,v=>{const c=(v||'').trim();if(!c)return;api({accion:'add_recurso',codigo_partida:cod,codigo_recurso:c,rendimiento:1,precio:0,unidad:'',resumen:''}).then(refresh)},false)}</td>
-      <td colspan="6" style="color:var(--text-muted);font-style:italic;font-size:11px;padding:5px 10px">doble clic en código para añadir recurso</td>
-      <td></td></tr>`;
+    // Ghost row de descomposición: borrador acumulado, commit con Enter / último Tab / clic fuera
+    const draftR={codigo:'',resumen:'',unidad:'',rendimiento:1,precio:0};
+    h+=`<tr class="ghost-row ghost-desc" data-row-key="d-ghost:${esc(cod)}">
+      <td>${ec('',true,v=>{draftR.codigo=(v||'').trim();},false)}</td>
+      <td><span class="tt-badge badge-mt" style="visibility:hidden">MT</span></td>
+      <td>${ec('',true,v=>{draftR.resumen=(v||'').trim();},false)}</td>
+      <td>${ec('',true,v=>{draftR.unidad=(v||'').trim();},false)}</td>
+      <td class="num">${ec('',true,v=>{const n=parseNum(v);draftR.rendimiento=n||1;},true)}</td>
+      <td class="num">${ec('',true,v=>{draftR.precio=parseNum(v);},true)} €</td>
+      <td class="num"></td>
+      <td style="color:var(--text-muted);font-size:10px;text-align:right;padding-right:6px">↵</td></tr>`;
     h+=`</table></div>`;
+    // El cableado del helper se hace después de renderizar (ver al final de renderDetail)
+    window._draftRecurso={partida:cod,draft:draftR};
   }
 
   // Mediciones
@@ -1012,7 +1071,7 @@ function renderDetail(nodo){
     if(hasMed){
       nodo.lineas_medicion.forEach((ln,i)=>{
         const mf=(campo,v)=>api({accion:'medicion',codigo_hijo:cod,codigo_padre:pc,indice:i,campo,valor:campo==='comentario'?v:parseNum(v)}).then(refresh);
-        h+=`<tr>
+        h+=`<tr data-row-key="m:${esc(cod)}:${esc(pc)}:${i}">
           <td>${ec(ln.comentario,true,v=>mf('comentario',v),false)}</td>
           <td class="num">${ec(ln.n_uds||'',true,v=>mf('n_uds',v),true)}</td>
           <td class="num">${ec(ln.longitud||'',true,v=>mf('longitud',v),true)}</td>
@@ -1024,19 +1083,68 @@ function renderDetail(nodo){
       h+=`<tr class="total-row"><td>Total</td><td colspan="5"></td><td class="num">${esc(nodo.medicion_fmt)}</td></tr>`;
     }
     {
-      const base={accion:'add_linea_medicion',codigo_hijo:cod,codigo_padre:pc,comentario:'',n_uds:0,longitud:0,anchura:0,altura:0};
-      const mcb=f=>v=>{if((v||'').trim()==='')return;const d=Object.assign({},base);d[f]=f==='comentario'?v.trim():parseNum(v);api(d).then(refresh)};
-      h+=`<tr class="ghost-row" style="cursor:default">
-        <td>${ec('',true,mcb('comentario'),false)}</td>
-        <td class="num">${ec('',true,mcb('n_uds'),true)}</td>
-        <td class="num">${ec('',true,mcb('longitud'),true)}</td>
-        <td class="num">${ec('',true,mcb('anchura'),true)}</td>
-        <td class="num">${ec('',true,mcb('altura'),true)}</td>
-        <td class="num"></td><td></td></tr>`;
+      // Ghost row de mediciones: borrador acumulado, commit con Enter / último Tab / clic fuera
+      const draftM={comentario:'',n_uds:0,longitud:0,anchura:0,altura:0};
+      h+=`<tr class="ghost-row ghost-med" data-row-key="m-ghost:${esc(cod)}:${esc(pc)}">
+        <td>${ec('',true,v=>{draftM.comentario=(v||'').trim();},false)}</td>
+        <td class="num">${ec('',true,v=>{draftM.n_uds=parseNum(v);},true)}</td>
+        <td class="num">${ec('',true,v=>{draftM.longitud=parseNum(v);},true)}</td>
+        <td class="num">${ec('',true,v=>{draftM.anchura=parseNum(v);},true)}</td>
+        <td class="num">${ec('',true,v=>{draftM.altura=parseNum(v);},true)}</td>
+        <td class="num"></td>
+        <td style="color:var(--text-muted);font-size:10px;text-align:right;padding-right:6px">↵</td></tr>`;
+      window._draftMedicion={partida:cod,padre:pc,draft:draftM};
     }
     h+=`</table></div>`;
   }
   panel.innerHTML=h;
+
+  // Descripción larga editable (multilinea — no usa ec(), guarda solo al salir o Ctrl+Enter)
+  const textoEl=panel.querySelector('#detailTexto');
+  if(textoEl){
+    const _orig=nodo.texto||'';
+    textoEl.addEventListener('blur',()=>{
+      const val=textoEl.innerText.replace(/\r/g,'').trimEnd();
+      if(val===_orig)return;
+      // Guardar sin refresh (no afecta cálculos; evita saltar el scroll)
+      api({accion:'texto',codigo:cod,valor:val});
+    });
+    textoEl.addEventListener('keydown',e=>{
+      if(e.key==='Escape'){
+        e.preventDefault();
+        textoEl.innerText=_orig;
+        textoEl.blur();
+      }
+      // Enter crea salto de línea normalmente (no preventDefault)
+    });
+  }
+
+  // Cablear ghost row de descomposición
+  const gDesc=panel.querySelector('.ghost-desc');
+  if(gDesc && window._draftRecurso && window._draftRecurso.partida===cod){
+    const partida=window._draftRecurso.partida;
+    const d=window._draftRecurso.draft;
+    _wireGhostRow(gDesc,()=>{
+      if(!d.codigo)return;
+      api({accion:'add_recurso',codigo_partida:partida,codigo_recurso:d.codigo,
+        rendimiento:d.rendimiento||1,precio:d.precio||0,
+        unidad:d.unidad,resumen:d.resumen}).then(refresh);
+    });
+  }
+
+  // Cablear ghost row de mediciones
+  const gMed=panel.querySelector('.ghost-med');
+  if(gMed && window._draftMedicion && window._draftMedicion.partida===cod){
+    const{partida,padre,draft:d}=window._draftMedicion;
+    _wireGhostRow(gMed,()=>{
+      // Si todo está vacío, no enviar
+      if(!d.comentario&&!d.n_uds&&!d.longitud&&!d.anchura&&!d.altura)return;
+      api({accion:'add_linea_medicion',codigo_hijo:partida,codigo_padre:padre,
+        comentario:d.comentario,n_uds:d.n_uds,longitud:d.longitud,
+        anchura:d.anchura,altura:d.altura}).then(refresh);
+    });
+  }
+
   _instalarPasteHandler(cod,pc);
 }
 
