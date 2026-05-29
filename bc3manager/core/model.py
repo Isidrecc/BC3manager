@@ -358,7 +358,9 @@ class Presupuesto:
         )
         nueva._precio_bc3 = precio
         self.add_concepto(nueva)
-        padre.hijos.append(Hijo(codigo_hijo=codigo, factor=1.0, rendimiento=1.0))
+        # cantidad=0.0: sin medición explícita, el importe es 0.
+        # El usuario la fija luego editando la celda Cantidad o añadiendo líneas de medición.
+        padre.hijos.append(Hijo(codigo_hijo=codigo, factor=1.0, rendimiento=1.0, cantidad=0.0))
 
     def add_capitulo(
         self, codigo: str, resumen: str, codigo_padre: str | None = None,
@@ -510,6 +512,45 @@ class Presupuesto:
         partida.hijos.append(Hijo(codigo_hijo=codigo_recurso, factor=1.0, rendimiento=rendimiento))
         partida.precio_es_dato = False
 
+    def reordenar_recurso(
+        self, codigo_partida: str, codigo_recurso: str, antes_de: Optional[str] = None
+    ) -> None:
+        """Mueve un recurso a otra posición dentro de la misma descomposición."""
+        partida = self.conceptos.get(codigo_partida)
+        if partida is None:
+            raise ValueError(f"Partida '{codigo_partida}' no encontrada")
+        hijo_obj = None
+        for i, h in enumerate(partida.hijos):
+            if h.codigo_hijo == codigo_recurso:
+                hijo_obj = partida.hijos.pop(i)
+                break
+        if hijo_obj is None:
+            raise ValueError(f"Recurso '{codigo_recurso}' no encontrado en '{codigo_partida}'")
+        if antes_de is None:
+            partida.hijos.append(hijo_obj)
+        else:
+            idx = next(
+                (i for i, h in enumerate(partida.hijos) if h.codigo_hijo == antes_de),
+                len(partida.hijos)
+            )
+            partida.hijos.insert(idx, hijo_obj)
+
+    def reordenar_medicion(
+        self, codigo_hijo: str, codigo_padre: str, from_idx: int, to_idx: int
+    ) -> None:
+        """Mueve una línea de medición de from_idx a to_idx."""
+        c = self.conceptos.get(codigo_hijo)
+        if c is None:
+            raise ValueError(f"Concepto '{codigo_hijo}' no encontrado")
+        med = c.mediciones.get(codigo_padre)
+        if med is None:
+            raise ValueError(f"Sin medición de '{codigo_hijo}' en '{codigo_padre}'")
+        if not (0 <= from_idx < len(med.lineas)):
+            raise ValueError(f"Índice {from_idx} fuera de rango")
+        linea = med.lineas.pop(from_idx)
+        to_idx = min(max(to_idx, 0), len(med.lineas))
+        med.lineas.insert(to_idx, linea)
+
     def eliminar_recurso(self, codigo_partida: str, codigo_recurso: str) -> None:
         """Desvincula un recurso de la descomposición de una partida.
         No elimina el concepto recurso del presupuesto (puede usarse en otros sitios)."""
@@ -611,7 +652,7 @@ class Presupuesto:
                 f"'{codigo}' ya existe en '{padre_destino}'. "
                 f"Para moverlo usa arrastrar y soltar."
             )
-        nuevo = Hijo(codigo_hijo=codigo, rendimiento=1.0, cantidad=1.0)
+        nuevo = Hijo(codigo_hijo=codigo, rendimiento=1.0, cantidad=0.0)
         if antes_de is None:
             destino.hijos.append(nuevo)
         else:
@@ -638,16 +679,14 @@ class Presupuesto:
         if concepto is None:
             return 0.0
         if concepto.tipo == TipoConcepto.CAPITULO and concepto.hijos:
-            # Si el capítulo tiene precio precalculado en el BC3 (Presto 8.8),
-            # usarlo directamente — es más fiable que reconstruir desde recursos.
+            # Los capítulos con precio precalculado en BC3 (Presto 8.8) conservan
+            # su precio original — es lo que el fichero dice que vale el capítulo.
             if concepto.precio_es_dato and concepto.precio > 0:
                 return round(concepto.precio, 2)
             total = 0.0
             for hijo in concepto.hijos:
                 total += self._importe_recursivo(hijo.codigo_hijo, codigo)
             return round(total, 2)
-        # Partida: precio * medición
-        imp = self.importe_en_padre(codigo, codigo_padre)
-        if imp == 0.0 and concepto.precio_es_dato and concepto.precio > 0:
-            return round(concepto.precio, 2)
-        return imp
+        # Partida: precio × medición.
+        # Si la medición es 0 (o no hay medición), el importe es 0 — sin excepciones.
+        return self.importe_en_padre(codigo, codigo_padre)
