@@ -580,6 +580,47 @@ class Presupuesto:
                 if med is not None:
                     concepto.mediciones[padre_destino] = med
 
+    def copiar_concepto(
+        self, codigo: str, padre_destino: str, antes_de: Optional[str] = None
+    ) -> None:
+        """Añade codigo como hijo de padre_destino sin quitarlo de su padre original.
+
+        Permite que el mismo concepto (partida, capítulo, unitario) aparezca en
+        varios lugares del árbol, que es el comportamiento estándar de FIEBDC-3.
+        La medición en el nuevo padre empieza vacía (0).
+
+        Lanza ValueError si:
+          - el concepto o el destino no existen
+          - el concepto ya es hijo de padre_destino
+          - se intentaría crear un ciclo (padre_destino desciende de codigo)
+        """
+        c = self.conceptos.get(codigo)
+        if c is None:
+            raise ValueError(f"Concepto '{codigo}' no encontrado")
+        destino = self.conceptos.get(padre_destino)
+        if destino is None:
+            raise ValueError(f"Destino '{padre_destino}' no encontrado")
+        if codigo == padre_destino:
+            raise ValueError("No se puede pegar un concepto dentro de sí mismo")
+        if self._es_descendiente(padre_destino, codigo):
+            raise ValueError(
+                f"No se puede pegar '{codigo}' dentro de uno de sus propios descendientes"
+            )
+        if any(h.codigo_hijo == codigo for h in destino.hijos):
+            raise ValueError(
+                f"'{codigo}' ya existe en '{padre_destino}'. "
+                f"Para moverlo usa arrastrar y soltar."
+            )
+        nuevo = Hijo(codigo_hijo=codigo, rendimiento=1.0, cantidad=1.0)
+        if antes_de is None:
+            destino.hijos.append(nuevo)
+        else:
+            idx = next(
+                (i for i, h in enumerate(destino.hijos) if h.codigo_hijo == antes_de),
+                len(destino.hijos)
+            )
+            destino.hijos.insert(idx, nuevo)
+
     def _es_descendiente(self, candidato: str, raiz: str) -> bool:
         """Devuelve True si candidato es hijo (directo o indirecto) de raiz."""
         c = self.conceptos.get(raiz)

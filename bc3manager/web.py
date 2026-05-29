@@ -64,12 +64,21 @@ def _arbol_json(p: Presupuesto) -> list[dict]:
 
 def _info_json(p):
     raiz = p.get(p.codigo_raiz) if p.codigo_raiz else None
+    # Detectar si el archivo está en carpeta temporal (subido por web, no abierto desde disco)
+    ruta = _estado.get("ruta_original") or ""
+    es_temporal = False
+    if ruta:
+        try:
+            es_temporal = os.path.commonpath([ruta, tempfile.gettempdir()]) == tempfile.gettempdir()
+        except (ValueError, OSError):
+            es_temporal = False
     return {"obra": raiz.resumen if raiz else "Sin nombre", "version": p.version_formato,
         "programa": p.programa_emisor,
         "capitulos": sum(1 for c in p.conceptos.values() if c.tipo == TipoConcepto.CAPITULO),
         "partidas": sum(1 for c in p.conceptos.values() if c.tipo == TipoConcepto.PARTIDA),
         "unitarios": sum(1 for c in p.conceptos.values() if c.tipo == TipoConcepto.UNITARIO),
-        "total": p.presupuesto_total(), "total_fmt": _fmt(p.presupuesto_total())}
+        "total": p.presupuesto_total(), "total_fmt": _fmt(p.presupuesto_total()),
+        "archivo_temporal": es_temporal}
 
 def _resp():
     p = _estado["presupuesto"]
@@ -230,6 +239,8 @@ def api_editar():
         elif accion == "mover":
             p.mover_concepto(d["codigo"], d["padre_origen"], d["padre_destino"],
                              d.get("antes_de"))   # antes_de puede ser None → append
+        elif accion == "copiar":
+            p.copiar_concepto(d["codigo"], d["padre_destino"], d.get("antes_de"))
         else:
             return jsonify({"error": f"Acción desconocida: {accion}"}), 400
         _autoguardar()
@@ -281,8 +292,9 @@ button{cursor:pointer;font-family:inherit}
 /* Columnas (anchos) */
 .col-cod{width:130px}
 .col-ud{width:60px}
-.col-cant{width:90px}
-.col-imp{width:110px}
+.col-cant{width:80px}
+.col-precio{width:80px}
+.col-imp{width:100px}
 .col-act{width:74px}
 /* Fila por tipo */
 .ttable tr.row-cap td{background:var(--bg-card)}
@@ -304,11 +316,11 @@ button{cursor:pointer;font-family:inherit}
 .row-actions button:hover{color:var(--text);background:var(--bg-hover);border-color:var(--border-light)}
 .row-actions button.danger:hover{color:var(--red);border-color:var(--red)}
 /* Filas fantasma para añadir */
-.ghost-row td{color:var(--text-muted);font-size:11px;padding:3px 8px;border-bottom:1px dashed var(--border);cursor:pointer;user-select:none}
-.ghost-row:hover td{background:var(--accent-soft);color:var(--accent)}
-.ghost-add{display:inline-flex;gap:12px}
-.ghost-add span{padding:1px 6px;border-radius:3px;transition:background .1s}
-.ghost-add span:hover{background:var(--accent-soft);color:var(--accent)}
+.ghost-row td{font-size:12px;padding:5px 8px;border-bottom:1px solid var(--border);cursor:default;user-select:none}
+.ghost-row:hover td{background:var(--accent-soft)}
+.ghost-row .ecell{min-width:70px;min-height:18px;border:1px dashed var(--border-light);border-radius:3px;display:inline-block;background:var(--bg-card);vertical-align:middle}
+.ghost-row .ecell.num{min-width:50px}
+.ghost-row td.col-cod .ecell:empty:before{content:'código\2026';color:var(--text-muted);font-size:10px;font-style:italic;pointer-events:none}
 /* Drag & drop */
 .drag-handle{cursor:grab;color:var(--text-muted);font-size:13px;padding:1px 4px;user-select:none;opacity:0;transition:opacity .1s;line-height:1}
 .ttable tbody tr:hover .drag-handle,.ttable tbody tr.active .drag-handle{opacity:.45}
@@ -347,16 +359,22 @@ button{cursor:pointer;font-family:inherit}
 .dtable .num{text-align:right;font-family:'JetBrains Mono',monospace;font-size:11px}
 .dtable .total-row td{font-weight:700;background:var(--bg-card);color:var(--green)}
 /* editable cells */
-.ecell{cursor:default;border-radius:3px;padding:2px 4px;transition:background .1s;min-width:30px;display:inline-block;user-select:none}
+.ecell{cursor:default;border-radius:3px;padding:2px 4px;transition:background .1s;min-width:30px;min-height:18px;display:inline-block;user-select:none;vertical-align:middle}
 .ecell[data-editable=true]:hover{background:var(--bg-active);cursor:default}
 .ecell[data-editable=true]:focus{outline:1px dashed var(--border-light);outline-offset:-1px}
 .ecell[contenteditable=true]{cursor:text;user-select:text;outline:2px solid var(--accent) !important;background:var(--bg) !important;outline-offset:-1px}
+/* Celda editable vacía: muestra borde punteado para que sea visible y clicable */
+.ecell[data-editable=true]:empty{border:1px dashed var(--border-light);background:var(--bg-card)}
 .actions-bar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
 .dropdown{position:relative}
 .dropdown-menu{display:none;position:absolute;top:100%;right:0;margin-top:4px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);min-width:200px;z-index:50;padding:4px}
 .dropdown-menu.open{display:block}
 .dropdown-item{display:block;width:100%;padding:8px 12px;text-align:left;font-size:13px;color:var(--text);background:none;border:none;border-radius:6px;transition:background .1s}
 .dropdown-item:hover{background:var(--bg-hover)}
+/* Fila copiada al portapapeles */
+.ttable tr.copied-row td{outline:1px dashed var(--accent);outline-offset:-1px}
+/* Toast de notificación */
+#_toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:8px 18px;font-size:12px;color:var(--text);box-shadow:var(--shadow);z-index:300;pointer-events:none;transition:opacity .35s;white-space:nowrap}
 .loading{display:flex;align-items:center;justify-content:center;height:100%;gap:12px;color:var(--text-dim)}
 .spinner{width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -380,7 +398,9 @@ button{cursor:pointer;font-family:inherit}
 <button class="btn" id="themeBtn" onclick="toggleTheme()" title="Cambiar tema">🌙</button>
 </div></header>
 <div id="uploadScreen" class="upload-screen"><div class="upload-box" id="uploadBox" onclick="document.getElementById('fileInput').click()" ondragover="event.preventDefault();this.classList.add('drag')" ondragleave="this.classList.remove('drag')" ondrop="event.preventDefault();this.classList.remove('drag');handleDrop(event)"><h2>Abre un archivo BC3</h2><p>Arrastra aquí o haz clic</p><button class="btn btn-accent">Seleccionar archivo</button></div></div>
-<div id="mainApp" style="display:none"><div class="stats-bar" id="statsBar"></div>
+<div id="mainApp" style="display:none">
+<div id="tempBanner" style="display:none;background:rgba(240,180,41,.12);border-bottom:1px solid var(--amber);padding:8px 32px;font-size:12px;color:var(--amber)">⚠ Este archivo está en una carpeta temporal. Tus cambios se guardan ahí, pero el archivo puede borrarse al reiniciar el equipo. Exporta a BC3 para conservarlo.</div>
+<div class="stats-bar" id="statsBar"></div>
 <div class="main">
   <div class="tree-panel">
     <div class="tree-scroll" id="treeContainer">
@@ -389,6 +409,7 @@ button{cursor:pointer;font-family:inherit}
         <th class="col-resumen">Descripción</th>
         <th class="col-ud">Ud</th>
         <th class="num col-cant">Cantidad</th>
+        <th class="num col-precio">Precio</th>
         <th class="num col-imp">Importe</th>
         <th class="col-act"></th>
       </tr></thead><tbody id="treeBody"></tbody></table>
@@ -400,6 +421,7 @@ button{cursor:pointer;font-family:inherit}
 
 <script>
 let treeData=[], fileInfo={}, curNode=null, curParent='';
+let _clipboard=null;   // {codigo, resumen} — concepto copiado con Ctrl+C
 
 // ---- Upload ----
 function uploadFile(input){const f=input.files[0];if(f)sendFile(f)}
@@ -422,10 +444,13 @@ async function api(data){
   const j=await r.json();if(j.error){alert(j.error);return null}return j
 }
 function refresh(j){
-  if(!j)return;fileInfo=j.info;treeData=j.arbol;renderStats();renderTree();
-  if(curNode){const f=findNode(treeData,curNode.codigo);if(f){curNode=f;renderDetail(f)}else{curNode=null;if(_pasteHandler){document.removeEventListener('paste',_pasteHandler);_pasteHandler=null}document.getElementById('detailPanel').innerHTML='<div class="detail-empty">Concepto eliminado</div>'}}
+  if(!j)return;
+  fileInfo=j.info;treeData=j.arbol;
+  // Actualizar undo ANTES de renderizar (evita que un error de render oculte el botón)
   const undoBtn=document.getElementById('undoBtn');
   if(undoBtn)undoBtn.style.display=(j.undo_disponible?'':'none');
+  renderStats();renderTree();
+  if(curNode){const f=findNode(treeData,curNode.codigo);if(f){curNode=f;renderDetail(f)}else{curNode=null;if(_pasteHandler){document.removeEventListener('paste',_pasteHandler);_pasteHandler=null}document.getElementById('detailPanel').innerHTML='<div class="detail-empty">Concepto eliminado</div>'}}
 }
 function findNode(nodes,cod){for(const n of nodes){if(n.codigo===cod)return n;if(n.hijos){const f=findNode(n.hijos,cod);if(f)return f}}return null}
 
@@ -468,10 +493,30 @@ function renderStats(){
     <div class="stat"><span class="stat-label">Capítulos</span><span class="stat-value">${i.capitulos}</span></div>
     <div class="stat"><span class="stat-label">Partidas</span><span class="stat-value">${i.partidas}</span></div>
     <div class="stat"><span class="stat-label">PEM</span><span class="stat-value total">${esc(i.total_fmt)} €</span></div>`;
+  // Banner si el archivo está en carpeta temporal
+  const tb=document.getElementById('tempBanner');
+  if(i.archivo_temporal){
+    tb.style.display='';
+  }else{
+    tb.style.display='none';
+  }
 }
 function renderTree(){
   const tb=document.getElementById('treeBody');tb.innerHTML='';
   treeData.forEach(n=>appendTreeRows(tb,n,0,''));
+  // Fila fantasma a nivel raíz para añadir capítulos de primer nivel
+  tb.appendChild(mkGhostTreeRow('',0));
+}
+// Enfoca y activa la celda de código de la ghost row correspondiente a codPadre
+function focusGhostRow(codPadre){
+  const ghost=[...document.querySelectorAll('.ghost-row')]
+    .find(g=>g.dataset.ghostParent===(codPadre||''));
+  if(!ghost)return;
+  const cell=ghost.querySelector('.ecell[data-editable=true]');
+  if(!cell)return;
+  ghost.scrollIntoView({behavior:'smooth',block:'center'});
+  // setTimeout para evitar que el ecActivate se interrumpa con el scroll
+  setTimeout(()=>ecActivate(cell),120);
 }
 // Inserta una fila por nodo (capítulo o partida) y, si está abierto, sus hijos.
 function appendTreeRows(tbody,nodo,level,parentCod){
@@ -483,32 +528,84 @@ function appendTreeRows(tbody,nodo,level,parentCod){
     tbody.appendChild(mkGhostTreeRow(nodo.codigo,level+1));
   }
 }
-// Fila fantasma al final de cada capítulo: fila en blanco real con código editable.
-// Terminar el código con # → capítulo; sin # → partida.
+// Fila fantasma al final de cada capítulo: fila en blanco idéntica a una fila real.
+// Tab navega entre celdas SIN crear el concepto.
+// Intro (Enter) en cualquier celda → crea el concepto con todo lo rellenado.
+// Código que termina en # → capítulo; sin # → partida.
 function mkGhostTreeRow(codigoPadre,level){
   const tr=document.createElement('tr');
   tr.className='ghost-row';
+  tr.dataset.ghostParent=codigoPadre||'';
   const pad=level*16;
   const indentHtml=`<span class="tt-indent" style="width:${pad}px"></span>`;
-  const codHtml=ec('',true,v=>{
-    const cod=(v||'').trim();
+
+  // Borrador acumulado hasta que el usuario pulsa Intro
+  const draft={codigo:'',resumen:'',unidad:'',precio:0};
+  let committing=false;
+
+  function ghostCommit(){
+    if(committing)return;
+    const cod=draft.codigo.trim();
     if(!cod)return;
+    committing=true;
     openCaps.add(codigoPadre);
-    const accion=cod.endsWith('#')
-      ?{accion:'add_capitulo',codigo:cod,resumen:'',codigo_padre:codigoPadre}
-      :{accion:'add_partida',codigo_padre:codigoPadre,codigo:cod,unidad:'',resumen:'',precio:0};
-    api(accion).then(refresh);
-  },false);
+    api(cod.endsWith('#')
+      ?{accion:'add_capitulo',codigo:cod,resumen:draft.resumen,codigo_padre:codigoPadre}
+      :{accion:'add_partida',codigo_padre:codigoPadre,codigo:cod,
+        unidad:draft.unidad,resumen:draft.resumen,precio:draft.precio}
+    ).then(refresh);
+  }
+
+  // Cada ec solo guarda en borrador (sin crear el concepto)
+  const codHtml=ec('',true,v=>{draft.codigo=(v||'').trim();},false);
+  const resHtml=ec('',true,v=>{draft.resumen=(v||'').trim();},false);
+  const udHtml =ec('',true,v=>{draft.unidad =(v||'').trim();},false);
+  const preHtml=ec('',true,v=>{draft.precio =parseNum(v);  },true);
+
   tr.innerHTML=
     `<td class="col-cod cod">${codHtml}</td>`+
     `<td class="col-resumen">${indentHtml}`+
-    `<span class="tt-toggle leaf">▶</span>`+
-    `<span style="color:var(--text-muted);font-size:11px;font-style:italic">`+
-    `doble clic en código para añadir (#&nbsp;=&nbsp;cap.)</span></td>`+
-    `<td class="col-ud"></td>`+
-    `<td class="num col-cant"></td>`+
-    `<td class="num col-imp"></td>`+
-    `<td class="col-act"></td>`;
+      `<span class="tt-toggle leaf">▶</span>`+
+      `<span class="tt-badge" style="visibility:hidden">Cap</span>`+
+      `${resHtml}</td>`+
+    `<td class="col-ud">${udHtml}</td>`+
+    `<td class="num col-cant"><span class="ecell num"></span></td>`+
+    `<td class="num col-precio">${preHtml}</td>`+
+    `<td class="num col-imp"><span class="ecell num"></span></td>`+
+    `<td class="col-act" style="color:var(--text-muted);font-size:10px;padding-right:6px;text-align:right">↵ Intro</td>`;
+
+  // Reemplazar el keydown de cada celda: Tab navega dentro de la ghost row, Enter crea
+  const cells=[...tr.querySelectorAll('.ecell[data-editable=true]')];
+  cells.forEach((el,idx)=>{
+    el.onkeydown=function(e){
+      // Enter funciona también si la celda solo tiene foco (no está en edición activa)
+      if(e.key==='Enter'){
+        e.preventDefault();
+        if(el.contentEditable==='true') el.blur();  // dispara ecBlur → guarda en draft
+        ghostCommit();
+        return;
+      }
+      if(el.contentEditable!=='true')return;  // resto solo si está en edición
+      if(e.key==='Tab'){
+        e.preventDefault();
+        el.blur();  // guarda en draft vía ecBlur
+        const tgt=e.shiftKey?cells[idx-1]:cells[idx+1];
+        if(tgt)ecActivate(tgt);
+        return;
+      }
+      if(e.key==='Escape'){
+        e.preventDefault();
+        el.dataset.cancelling='true';
+        el.textContent=el.dataset.orig||'';
+        el.contentEditable='false';
+        el.title='Doble clic para editar';
+        el.blur();
+        delete el.dataset.cancelling;
+        return;
+      }
+    };
+  });
+
   // La fila fantasma también es zona de drop: soltar aquí → append al capítulo padre
   tr.addEventListener('dragover',e=>{
     if(!_dragInfo)return;
@@ -572,11 +669,24 @@ function mkTreeRow(nodo,level,parentCod){
   // El atributo draggable solo si tiene padre (no se puede mover la raíz)
   if(parentCod) tr.draggable=true;
 
+  // Precio unitario: capítulo → vacío; partida con desglose → bloqueado; partida simple → editable
+  let precioHtml;
+  if(isCap){
+    precioHtml=`<span class="ecell num" style="color:var(--text-muted)">—</span>`;
+  }else if(nodo.recursos&&nodo.recursos.length>0){
+    precioHtml=`<span class="ecell num" contenteditable="false"
+      title="Calculado desde la descomposición — no editable directamente"
+      style="cursor:default;opacity:.7">${esc(nodo.precio_fmt)}</span>`;
+  }else{
+    precioHtml=ec(nodo.precio_fmt||'0,00',true,v=>api({accion:'precio',codigo:nodo.codigo,valor:parseNum(v)}).then(refresh),true);
+  }
+
   tr.innerHTML=
     `<td class="col-cod cod">${ec(nodo.codigo,true,v=>api({accion:'codigo',codigo_viejo:nodo.codigo,codigo_nuevo:v.trim()}).then(refresh),false)}</td>`+
     `<td class="col-resumen">${indentHtml}${toggleHtml}${badgeHtml}${ec(nodo.resumen,true,v=>api({accion:'resumen',codigo:nodo.codigo,valor:v}).then(refresh),false)}</td>`+
     `<td class="col-ud">${isCap?'':ec(nodo.unidad||'',true,v=>api({accion:'unidad',codigo:nodo.codigo,valor:v}).then(refresh),false)}</td>`+
     `<td class="num col-cant">${cantHtml}</td>`+
+    `<td class="num col-precio">${precioHtml}</td>`+
     `<td class="num col-imp imp">${esc(nodo.importe_fmt)} €</td>`+
     `<td class="col-act">${actsHtml}</td>`;
 
@@ -698,7 +808,8 @@ function ecBlur(el,id){
 }
 
 function ecKey(e,el){
-  if(el.contentEditable!=='true')return;   // no está en modo edición
+  if(el.contentEditable!=='true')return;
+
   if(e.key==='Escape'){
     e.preventDefault();
     el.dataset.cancelling='true';
@@ -710,43 +821,60 @@ function ecKey(e,el){
     return;
   }
   if(e.key==='Enter'){
-    e.preventDefault();el.blur();   // guarda y desactiva
+    e.preventDefault();el.blur();
     return;
   }
+
+  // Helpers: celdas editables de la fila actual y de la tabla actual
+  const _tr=el.closest('tr');
+  const _table=el.closest('table');
+  const _rowCells=()=>_tr?[..._tr.querySelectorAll('.ecell[data-editable=true]')]:[];
+  const _tableRows=()=>_table?[..._table.querySelectorAll('tr')].filter(r=>r.querySelector('.ecell[data-editable=true]')):[];
+
   if(e.key==='Tab'){
     e.preventDefault();el.blur();
-    const all=[...document.querySelectorAll('.ecell[data-editable=true]')];
-    const i=all.indexOf(el);
-    const next=e.shiftKey?all[i-1]:all[i+1];
-    if(next)ecActivate(next);   // Tab activa directamente la siguiente celda
+    const rc=_rowCells();const ci=rc.indexOf(el);
+    if(!e.shiftKey){
+      // → siguiente celda en la misma fila; si es la última, primera celda de la fila siguiente
+      if(ci<rc.length-1){ecActivate(rc[ci+1]);}
+      else{
+        const rows=_tableRows();const ri=rows.indexOf(_tr);
+        const nxt=rows[ri+1];
+        if(nxt){const nc=[...nxt.querySelectorAll('.ecell[data-editable=true]')];if(nc.length)ecActivate(nc[0]);}
+      }
+    }else{
+      // ← celda anterior en la misma fila; si es la primera, última celda de la fila anterior
+      if(ci>0){ecActivate(rc[ci-1]);}
+      else{
+        const rows=_tableRows();const ri=rows.indexOf(_tr);
+        const prv=rows[ri-1];
+        if(prv){const pc=[...prv.querySelectorAll('.ecell[data-editable=true]')];if(pc.length)ecActivate(pc[pc.length-1]);}
+      }
+    }
     return;
   }
+
   if(e.key==='ArrowDown'||e.key==='ArrowUp'){
-    // Navega a la misma columna en la fila anterior/siguiente de la misma tabla
-    const tr=el.closest('tr');if(!tr)return;
-    const table=tr.closest('table');if(!table)return;
-    const rows=[...table.querySelectorAll('tbody tr, tr')].filter(r=>r.querySelector('.ecell[data-editable=true]'));
-    const ri=rows.indexOf(tr);
-    const cells=[...tr.querySelectorAll('.ecell[data-editable=true]')];
-    const ci=cells.indexOf(el);
-    const targetRow=e.key==='ArrowDown'?rows[ri+1]:rows[ri-1];
-    if(!targetRow)return;
-    const targetCells=[...targetRow.querySelectorAll('.ecell[data-editable=true]')];
-    const targetCell=targetCells[ci]||targetCells[targetCells.length-1];
-    if(targetCell){e.preventDefault();el.blur();ecActivate(targetCell);}
+    const rc=_rowCells();const ci=rc.indexOf(el);
+    const rows=_tableRows();const ri=rows.indexOf(_tr);
+    const tgtRow=e.key==='ArrowDown'?rows[ri+1]:rows[ri-1];
+    if(!tgtRow)return;
+    const tc=[...tgtRow.querySelectorAll('.ecell[data-editable=true]')];
+    const tgtCell=tc[ci]||tc[tc.length-1];
+    if(tgtCell){e.preventDefault();el.blur();ecActivate(tgtCell);}
     return;
   }
+
   if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
-    // Solo navega entre celdas de la misma fila si el cursor está al borde del texto
+    // Navega a la celda adyacente de la misma fila solo al llegar al borde del texto
     const sel=window.getSelection();
     const atStart=sel&&sel.anchorOffset===0;
-    const atEnd=sel&&sel.anchorOffset===(el.textContent.length);
+    const atEnd=sel&&sel.anchorOffset===el.textContent.length;
     if(e.key==='ArrowLeft'&&!atStart)return;
     if(e.key==='ArrowRight'&&!atEnd)return;
     e.preventDefault();el.blur();
-    const all=[...document.querySelectorAll('.ecell[data-editable=true]')];
-    const i=all.indexOf(el);
-    const next=e.key==='ArrowRight'?all[i+1]:all[i-1];
+    const rc=_rowCells();const ci=rc.indexOf(el);
+    const next=e.key==='ArrowRight'?rc[ci+1]:rc[ci-1];
     if(next)ecActivate(next);
     return;
   }
@@ -824,7 +952,7 @@ function renderDetail(nodo){
       <div class="detail-meta-item"><span class="detail-meta-label">Cantidad</span><span class="detail-meta-value">
         ${nodo.lineas_medicion&&nodo.lineas_medicion.length>0
           ? `<span class="ecell" contenteditable="false" title="Cantidad calculada desde las líneas de medición — edítalas abajo" style="cursor:default;opacity:.7">${esc(nodo.medicion_fmt||'0,00')}</span> <span title="Calculada desde las mediciones — no editable directamente" style="font-size:11px;color:var(--text-muted)">🔒</span>`
-          : `${ec(nodo.medicion_fmt||'0,00',true,v=>setCantidadSimple(cod,pc,parseNum(v)).then(refresh),true)}`
+          : `${ec(nodo.medicion_fmt||'0,00',true,v=>setCantidadSimple(cod,pc,parseNum(v)),true)}`
         }
       </span></div>
       <div class="detail-meta-item"><span class="detail-meta-label">Precio</span><span class="detail-meta-value">
@@ -953,19 +1081,17 @@ function _instalarPasteHandler(cod, pc){
 }
 
 // ---- Actions ----
-async function addPartida(codPadre){
-  const cod=prompt('Código:','');if(!cod)return;
-  const res=prompt('Descripción:','');if(res===null)return;
-  const ud=prompt('Unidad:','ud');if(ud===null)return;
-  const pr=prompt('Precio unitario:','0');if(pr===null)return;
+// Las funciones add* abren el capítulo destino y enfocan la ghost row,
+// permitiendo al usuario rellenar código/descripción/ud/precio inline (no usan prompt).
+function addPartida(codPadre){
   if(codPadre) openCaps.add(codPadre);
-  refresh(await api({accion:'add_partida',codigo_padre:codPadre,codigo:cod,unidad:ud,resumen:res,precio:parseNum(pr)}))
+  renderTree();
+  focusGhostRow(codPadre||'');
 }
-async function addCapitulo(codPadre){
-  const cod=prompt('Código (ej: 05#):','');if(!cod)return;
-  const res=prompt('Descripción:','');if(res===null)return;
+function addCapitulo(codPadre){
   if(codPadre) openCaps.add(codPadre);
-  refresh(await api({accion:'add_capitulo',codigo:cod,resumen:res,codigo_padre:codPadre||null}))
+  renderTree();
+  focusGhostRow(codPadre||'');
 }
 async function eliminarConcepto(cod,codPadre){
   if(!confirm('¿Eliminar "'+cod+'"?'))return;
@@ -985,6 +1111,12 @@ function exportarBC3(){window.location='/api/exportar'}
 function toggleDropdown(btn){const m=btn.nextElementSibling;const o=m.classList.toggle('open');if(o)setTimeout(()=>document.addEventListener('click',function h(e){if(!m.contains(e.target)&&e.target!==btn){m.classList.remove('open');document.removeEventListener('click',h)}},0))}
 function closeDropdowns(){document.querySelectorAll('.dropdown-menu.open').forEach(m=>m.classList.remove('open'))}
 function esc(s){if(s==null)return'';const d=document.createElement('div');d.textContent=String(s);return d.innerHTML}
+function showToast(msg,ms=2200){
+  let t=document.getElementById('_toast');
+  if(!t){t=document.createElement('div');t.id='_toast';t.style.opacity='0';document.body.appendChild(t)}
+  t.textContent=msg;t.style.opacity='1';
+  clearTimeout(t._tid);t._tid=setTimeout(()=>{t.style.opacity='0'},ms);
+}
 
 // Auto-load file if passed as argument
 window.addEventListener('DOMContentLoaded', ()=>{
@@ -1014,10 +1146,56 @@ async function undoAction(){
   refresh(j);
 }
 document.addEventListener('keydown',e=>{
+  // Ignorar siempre si hay una celda en edición activa
+  if(document.activeElement&&document.activeElement.contentEditable==='true')return;
+
+  // Ctrl+Z — deshacer
   if((e.ctrlKey||e.metaKey)&&e.key==='z'&&!e.shiftKey){
-    // Solo si no hay una celda en edición activa
-    if(document.activeElement&&document.activeElement.contentEditable==='true')return;
     e.preventDefault();undoAction();
+    return;
+  }
+
+  // Ctrl+C — copiar concepto seleccionado al portapapeles interno
+  if((e.ctrlKey||e.metaKey)&&e.key==='c'&&!e.shiftKey){
+    // Solo interceptar si no hay texto seleccionado (para no romper el copiar normal)
+    if(window.getSelection&&window.getSelection().toString())return;
+    if(!curNode)return;
+    e.preventDefault();
+    _clipboard={codigo:curNode.codigo,resumen:curNode.resumen};
+    // Marcar visualmente la fila copiada
+    document.querySelectorAll('.ttable tr.copied-row').forEach(r=>r.classList.remove('copied-row'));
+    document.querySelectorAll('.ttable tbody tr.active').forEach(r=>r.classList.add('copied-row'));
+    showToast(`📋 Copiado: ${curNode.codigo} — ${curNode.resumen||'sin descripción'}`);
+    return;
+  }
+
+  // Ctrl+V — pegar concepto copiado justo debajo del concepto seleccionado
+  if((e.ctrlKey||e.metaKey)&&e.key==='v'&&!e.shiftKey){
+    if(!_clipboard||!curNode||!curParent)return;
+    // preventDefault evita que el evento 'paste' posterior interfiera con _pasteHandler
+    e.preventDefault();
+    // Insertar después del nodo actual (en el mismo padre)
+    const antes_de=_siblingAfter(curParent,curNode.codigo);
+    api({accion:'copiar',codigo:_clipboard.codigo,padre_destino:curParent,antes_de})
+      .then(j=>{
+        if(!j)return;
+        refresh(j);
+        showToast(`✓ Pegado: ${_clipboard.codigo}`);
+        // Seleccionar la fila recién pegada
+        setTimeout(()=>{
+          const row=[...document.querySelectorAll('.ttable tbody tr')]
+            .find(r=>r._nodoData&&r._nodoData.codigo===_clipboard.codigo&&r._parentCod===curParent);
+          if(row)row.click();
+        },80);
+      });
+    return;
+  }
+
+  // Supr — eliminar concepto seleccionado
+  if(e.key==='Delete'&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey){
+    if(!curNode||!curParent)return;
+    e.preventDefault();
+    eliminarConcepto(curNode.codigo,curParent);
   }
 });
 
