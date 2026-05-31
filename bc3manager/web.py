@@ -889,8 +889,11 @@ button{cursor:pointer;font-family:inherit}
 .tabulator-placeholder{color:var(--text-muted)!important;font-style:italic;padding:16px!important}
 .tabulator .tabulator-move-handle{color:var(--text-muted)!important}
 .tab-num{text-align:right!important;font-family:'JetBrains Mono',monospace!important;font-size:11px!important}
-.tab-add-row{display:flex;align-items:center;gap:6px;margin-top:8px;color:var(--text-muted);font-size:12px;cursor:pointer;padding:4px 2px;border-radius:var(--radius);transition:color .1s}
+.tab-actions{display:flex;align-items:center;gap:18px;margin-top:8px}
+.tab-add-row{display:inline-flex;align-items:center;gap:6px;color:var(--text-muted);font-size:12px;cursor:pointer;padding:4px 2px;border-radius:var(--radius);transition:color .1s}
 .tab-add-row:hover{color:var(--accent)}
+.tab-del-row{display:inline-flex;align-items:center;gap:6px;color:var(--text-muted);font-size:12px;cursor:pointer;padding:4px 2px;border-radius:var(--radius);transition:color .1s}
+.tab-del-row:hover{color:var(--red)}
 </style></head><body>
 <header class="header">
 <div class="logo">BC3<span>Manager</span></div><div class="sep"></div><span id="fileName" style="font-size:12px;color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
@@ -960,6 +963,7 @@ let treeData=[], fileInfo={}, curNode=null, curParent='';
 let _clipboard=null;        // {codigo,resumen} o [{codigo,padre},...] para selección múltiple
 let _discrepancias=[];      // Discrepancias entre precio BC3 y precio recalculado al cargar
 let _pemValidacion=null;    // {archivo, calculado, diferencia} comparación PEM al cargar
+let _ctxCopia='arbol';      // zona con el foco para Ctrl+C: 'arbol' | 'descomp' | 'medic'
 let _tabDescomp=null;       // instancia Tabulator — desglose
 let _tabMedic=null;         // instancia Tabulator — mediciones
 let selectedNodes=[];       // [{codigo,padre}] — selección múltiple en árbol
@@ -1228,10 +1232,13 @@ function _initTabDescomp(nodo,cod){
 
   _tabDescomp=new Tabulator(el,{
     data, index:'codigo', layout:'fitColumns',
-    movableRows:true, selectable:true, reactiveData:false,
+    movableRows:true, selectableRows:true, reactiveData:false,
     placeholder:'Sin recursos — pulsa Añadir',
     columnDefaults:{headerSort:false,resizable:false},
     columns:[
+      {formatter:'rowSelection',titleFormatter:'rowSelection',hozAlign:'center',
+       headerSort:false,width:34,minWidth:34,
+       cellClick:(e,cell)=>cell.getRow().toggleSelect()},
       {rowHandle:true,formatter:'handle',headerSort:false,width:26,minWidth:26},
       {title:'Código',field:'codigo',editor:'input',width:110,
        formatter:c=>`<span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim)">${esc(c.getValue()||'')}</span>`,
@@ -1359,12 +1366,15 @@ function _initTabMedic(nodo,cod,pc){
 
   _tabMedic=new Tabulator(el,{
     data,index:'_idx',layout:'fitColumns',
-    movableRows:true,selectable:true,reactiveData:false,
-    clipboard:true,clipboardCopyHeader:false,
+    movableRows:true,selectableRows:true,reactiveData:false,
+    clipboard:'paste',clipboardCopyHeader:false,
     clipboardPasteAction:'insert',clipboardPasteParser:_parseMedClipboard,
     placeholder:'Sin mediciones — pulsa Añadir',
     columnDefaults:{headerSort:false,resizable:false},
     columns:[
+      {formatter:'rowSelection',titleFormatter:'rowSelection',hozAlign:'center',
+       headerSort:false,width:34,minWidth:34,clipboard:false,
+       cellClick:(e,cell)=>cell.getRow().toggleSelect()},
       {rowHandle:true,formatter:'handle',headerSort:false,width:26,minWidth:26,clipboard:false},
       {title:'Comentario',field:'comentario',editor:'input',
        cellEdited:function(cell){
@@ -2024,16 +2034,18 @@ function renderDetail(nodo){
     >${esc(nodo.texto||'')}</div></div>`;
 
   // Descomposición — Tabulator
-  h+=`<div class="detail-section"><h3>Descomposición</h3>
+  h+=`<div class="detail-section"><h3>Descomposición
+      <span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:6px">Casilla izquierda para seleccionar · Shift+clic = rango · Ctrl+C copia · Supr borra</span>
+    </h3>
     <div id="tab-descomp"></div>
-    <div class="tab-add-row" onclick="
-      if(!_tabDescomp)return;
-      _tabDescomp.addRow({tipo_fiebdc:'3',_isNew:true},false).then(r=>{
-        const cells=r.getCells();
-        const ed=cells.find(c=>c.getField()==='codigo');
-        if(ed)setTimeout(()=>ed.edit(),30);
-      })">
-      ＋ Añadir recurso
+    <div class="tab-actions">
+      <span class="tab-add-row" onclick="
+        if(!_tabDescomp)return;
+        _tabDescomp.addRow({tipo_fiebdc:'3',_isNew:true},false).then(r=>{
+          const ed=r.getCells().find(c=>c.getField()==='codigo');
+          if(ed)setTimeout(()=>ed.edit(),30);
+        })">＋ Añadir recurso</span>
+      <span class="tab-del-row" onclick="eliminarSelDesglose()">🗑 Eliminar seleccionadas</span>
     </div>
   </div>`;
 
@@ -2044,14 +2056,14 @@ function renderDetail(nodo){
       <span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:6px">Ctrl+V pega desde Excel</span>
     </h3>
     <div id="tab-medic" data-medid="${esc(medId)}"></div>
-    <div class="tab-add-row" onclick="
-      if(!_tabMedic)return;
-      _tabMedic.addRow({_isNew:true,_idx:_tabMedic.getDataCount()},false).then(r=>{
-        const cells=r.getCells();
-        const ed=cells.find(c=>c.getField()==='comentario');
-        if(ed)setTimeout(()=>ed.edit(),30);
-      })">
-      ＋ Añadir línea
+    <div class="tab-actions">
+      <span class="tab-add-row" onclick="
+        if(!_tabMedic)return;
+        _tabMedic.addRow({_isNew:true,_idx:_tabMedic.getDataCount()},false).then(r=>{
+          const ed=r.getCells().find(c=>c.getField()==='comentario');
+          if(ed)setTimeout(()=>ed.edit(),30);
+        })">＋ Añadir línea</span>
+      <span class="tab-del-row" onclick="eliminarSelMedic()">🗑 Eliminar seleccionadas</span>
     </div>
     </div>`;
   }
@@ -2170,16 +2182,79 @@ function _construirTSV(nodos){
 }
 // Escribe texto en el portapapeles del SISTEMA (para pegar fuera, p.ej. Excel).
 // Funciona en contexto seguro (localhost cuenta como seguro).
-function _copiarSistemaTSV(nodos){
-  if(!nodos||!nodos.length)return;
-  const tsv=_construirTSV(nodos);
+function _escribirPortapapeles(texto){
   if(navigator.clipboard&&navigator.clipboard.writeText){
-    navigator.clipboard.writeText(tsv).catch(()=>_copiarFallback(tsv));
+    navigator.clipboard.writeText(texto).catch(()=>_copiarFallback(texto));
   }else{
-    _copiarFallback(tsv);
+    _copiarFallback(texto);
   }
 }
-// Fallback para navegadores/cont*extos sin Clipboard API.
+function _copiarSistemaTSV(nodos){
+  if(!nodos||!nodos.length)return;
+  _escribirPortapapeles(_construirTSV(nodos));
+}
+// Número → formato europeo (coma decimal) para pegar en Excel español.
+function _numEU(x){
+  if(x==null||x==='')return '';
+  if(typeof x==='number')return String(x).replace('.',',');
+  return String(x);
+}
+// Copia las filas de una tabla Tabulator (desglose o mediciones) como TSV.
+// Si hay filas seleccionadas, copia esas; si no, copia todas.
+function _copiarTablaTSV(tab, tipo){
+  if(!tab)return;
+  let rows=[];
+  try{ rows=tab.getSelectedData(); }catch(e){}
+  if(!rows||!rows.length){ try{ rows=tab.getData(); }catch(e){} }
+  rows=(rows||[]).filter(r=>!r._isNew);
+  if(!rows.length){ showToast('No hay filas que copiar'); return; }
+  let head, filas;
+  if(tipo==='descomp'){
+    const TL={'1':'MO','2':'MQ','3':'MT','4':'AUX'};
+    head=['Código','Tipo','Descripción','Ud','Rendimiento','Precio','Importe'];
+    filas=rows.map(r=>[r.codigo,TL[r.tipo_fiebdc]||'',r.resumen,r.unidad,
+      _numEU(r.rendimiento),_numEU(r.precio),r.importe_fmt||'']);
+  }else{
+    head=['Comentario','Uds','Largo','Ancho','Alto','Parcial'];
+    filas=rows.map(r=>[r.comentario,_numEU(r.n_uds),_numEU(r.longitud),
+      _numEU(r.anchura),_numEU(r.altura),r.subtotal_fmt||'']);
+  }
+  const limpia=c=>String(c==null?'':c).replace(/\t/g,' ').replace(/\r?\n/g,' ');
+  const tsv=[head.join('\t'),...filas.map(f=>f.map(limpia).join('\t'))].join('\r\n');
+  _escribirPortapapeles(tsv);
+  showToast(`📋 Copiadas ${filas.length} fila${filas.length>1?'s':''} (pega en Excel)`);
+}
+
+// Elimina los recursos seleccionados del desglose de la partida actual.
+async function eliminarSelDesglose(){
+  if(!_tabDescomp||!curNode)return;
+  const sel=_tabDescomp.getSelectedData().filter(r=>!r._isNew);
+  if(!sel.length){showToast('Selecciona recursos (casilla izquierda)');return;}
+  if(!confirm(`¿Quitar ${sel.length} recurso(s) de la descomposición?`))return;
+  const cod=curNode.codigo;
+  let lastJ=null;
+  for(const r of sel){
+    const j=await api({accion:'eliminar_recurso',codigo_partida:cod,codigo_recurso:r.codigo});
+    if(j)lastJ=j;
+  }
+  if(lastJ)calcSave(null,lastJ);
+}
+// Elimina las líneas de medición seleccionadas (de mayor a menor índice para no desfasar).
+async function eliminarSelMedic(){
+  if(!_tabMedic||!curNode||!curParent)return;
+  const sel=_tabMedic.getSelectedData().filter(r=>!r._isNew);
+  if(!sel.length){showToast('Selecciona líneas (casilla izquierda)');return;}
+  if(!confirm(`¿Eliminar ${sel.length} línea(s) de medición?`))return;
+  const cod=curNode.codigo, pc=curParent;
+  const idxs=sel.map(r=>r._idx).sort((a,b)=>b-a);   // descendente
+  let lastJ=null;
+  for(const idx of idxs){
+    const j=await api({accion:'eliminar_linea_medicion',codigo_hijo:cod,codigo_padre:pc,indice:idx});
+    if(j)lastJ=j;
+  }
+  if(lastJ)calcSave(null,lastJ);
+}
+// Fallback para navegadores/contextos sin Clipboard API.
 function _copiarFallback(texto){
   try{
     const ta=document.createElement('textarea');
@@ -2225,6 +2300,14 @@ async function redoAction(){
   if(j.error){showToast(j.error);return}
   refresh(j);
 }
+// Rastrea en qué zona está trabajando el usuario, para que Ctrl+C copie lo
+// correcto (árbol de partidas, desglose o mediciones).
+document.addEventListener('mousedown',e=>{
+  if(e.target.closest && e.target.closest('#tab-descomp')) _ctxCopia='descomp';
+  else if(e.target.closest && e.target.closest('#tab-medic')) _ctxCopia='medic';
+  else if(e.target.closest && e.target.closest('.tree-scroll')) _ctxCopia='arbol';
+},true);
+
 document.addEventListener('keydown',e=>{
   // Ignorar siempre si hay una celda en edición activa
   if(document.activeElement&&document.activeElement.contentEditable==='true')return;
@@ -2243,6 +2326,10 @@ document.addEventListener('keydown',e=>{
   // Ctrl+C — copiar selección: portapapeles interno (pegar en la app) + TSV (pegar en Excel)
   if((e.ctrlKey||e.metaKey)&&e.key==='c'&&!e.shiftKey){
     if(window.getSelection&&window.getSelection().toString())return;
+    // Según la zona con el foco, copia desglose o mediciones a Excel
+    if(_ctxCopia==='descomp'&&_tabDescomp){e.preventDefault();_copiarTablaTSV(_tabDescomp,'descomp');return;}
+    if(_ctxCopia==='medic'&&_tabMedic){e.preventDefault();_copiarTablaTSV(_tabMedic,'medic');return;}
+    // Resto: copiar partidas del árbol
     if(!curNode)return;
     e.preventDefault();
     let nodos;
@@ -2285,8 +2372,15 @@ document.addEventListener('keydown',e=>{
     return;
   }
 
-  // Supr — eliminar concepto(s) seleccionados
+  // Supr — eliminar lo seleccionado según la zona con el foco
   if(e.key==='Delete'&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey){
+    // En desglose o mediciones: borra las filas seleccionadas de esa tabla
+    if(_ctxCopia==='descomp'&&_tabDescomp&&_tabDescomp.getSelectedData().filter(r=>!r._isNew).length){
+      e.preventDefault();eliminarSelDesglose();return;
+    }
+    if(_ctxCopia==='medic'&&_tabMedic&&_tabMedic.getSelectedData().filter(r=>!r._isNew).length){
+      e.preventDefault();eliminarSelMedic();return;
+    }
     if(selectedNodes.length>1){
       e.preventDefault();
       const lista=selectedNodes.map(s=>s.codigo).join(', ');
