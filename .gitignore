@@ -16,6 +16,20 @@ dist/
 .venv/
 venv/
 env/
+# Temporales filtrados por escrituras atómicas (p.ej. model.py.tmp.1234.abcd)
+*.py.tmp.*
+*.tmp
+
+# --- Archivos propios de Presto (no son del proyecto, suelen estar bloqueados) ---
+*.pzh
+*.bak
+
+# --- Excel (validación generada y datos de obra reales) ---
+*.xlsx
+
+# --- Config local de editores/herramientas ---
+.obsidian/
+.claude/
 
 # --- Datos de obra reales (no compartir presupuestos de clientes) ---
 # Se permite el ejemplo de demostración; el resto de .bc3 se ignora.

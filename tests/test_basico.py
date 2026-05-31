@@ -54,6 +54,133 @@ def test_total():
     assert abs(p.presupuesto_total() - 4523.25) < 0.01
 
 
+def test_validar_precios_sin_discrepancias():
+    """En el ejemplo, los precios del archivo deben coincidir con el recálculo."""
+    p = leer_bc3(EJEMPLO)
+    discrepancias = p.validar_precios_cargados()
+    assert discrepancias == [], (
+        f"No deberían haber discrepancias en ejemplo_son_font.bc3. "
+        f"Encontradas: {discrepancias}"
+    )
+
+
+def test_validar_precios_detecta_discrepancia():
+    """Si tras cargar manipulamos un _precio_bc3 para que no cuadre con la
+    descomposición, validar_precios_cargados debe detectarlo."""
+    p = leer_bc3(EJEMPLO)
+    # E0101 tiene precio calculado 11.375 (MO001*0.25 + MQ001*0.15)
+    # Forzamos un _precio_bc3 distinto para simular un archivo inconsistente
+    p.get("E0101")._precio_bc3 = 99.99
+    disc = p.validar_precios_cargados()
+    assert any(d["codigo"] == "E0101" for d in disc), (
+        f"Debería haber detectado discrepancia en E0101. Encontradas: {disc}"
+    )
+
+
+def test_lineas_porcentaje_medios_auxiliares():
+    """Las líneas de porcentaje (%MA = medios auxiliares) deben aplicarse sobre
+    el acumulado de la descomposición, NO como precio×rendimiento.
+
+    Caso real de Test_SONFONT.bc3:
+      MOV.02.01 = MO.006×0.08 + MAQ.RET.10×0.155, + 7% medios auxiliares
+                = (21.60×0.08 + 55.23×0.155) × 1.07 = 11.0089 ≈ 11.01
+    """
+    ruta = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "Test_SONFONT.bc3"
+    )
+    if not os.path.exists(ruta):
+        return  # archivo opcional; si no está, no se ejecuta
+    p = leer_bc3(ruta)
+    # El concepto %MA.7 debe detectarse como porcentaje
+    from bc3manager.core.model import Presupuesto
+    assert Presupuesto.es_porcentaje(p.get("%MA.7"))
+    # El archivo trae ~K → el redondeo de Presto debe estar activo
+    assert p.redondeo_activo, "El ~K debe activar el redondeo a 2 decimales"
+    # Precio exacto al céntimo con redondeo de subtotales (DecImp=2) + 7% medios aux.
+    #   DEM.01.01: (2,16 + 8,28) × 1,07, redondeando cada subtotal = 11,17
+    assert p.get("DEM.01.01").precio == 11.17, (
+        f"DEM.01.01 = {p.get('DEM.01.01').precio}, esperado 11.17 (Presto)"
+    )
+    assert p.get("MOV.02.01").precio == 11.01, (
+        f"MOV.02.01 = {p.get('MOV.02.01').precio}, esperado 11.01 (Presto)"
+    )
+    # Todas las partidas con descomposición deben coincidir con su _precio_bc3
+    from bc3manager.core.model import TipoConcepto
+    for cod, c in p.conceptos.items():
+        if c.tipo == TipoConcepto.PARTIDA and c.hijos:
+            arch = getattr(c, "_precio_bc3", None)
+            if arch and arch > 0:
+                # Tolerancia 2 céntimos: absorbe el redondeo a 2 decimales que
+                # aplica Presto al precio unitario. El bug de medios auxiliares
+                # producía desviaciones del 5-7% (céntimos a euros), muy por
+                # encima de esta tolerancia.
+                assert abs(arch - c.precio) < 0.02, (
+                    f"{cod}: archivo={arch} calc={c.precio}"
+                )
+
+
+def test_redondeos_k_distintos():
+    """Verifica que se leen los decimales del registro ~K (cada parámetro con
+    un valor distinto) y que el cálculo reproduce EXACTAMENTE los precios e
+    importes del archivo de Presto, incluido el PEM."""
+    ruta = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "Test_REDONDEO.bc3"
+    )
+    if not os.path.exists(ruta):
+        return
+    from bc3manager.core.model import TipoConcepto
+    p = leer_bc3(ruta)
+    # Mapeo del ~K  \8\2\3\7\6\5\4\  →  DecImp=7, DecPar=5, Dec=4, DecCantRend=3
+    assert p.redondeo_activo
+    assert p.dec_subtotal == 7, f"DecImp={p.dec_subtotal}"
+    assert p.dec_precio_partida == 5, f"DecPar={p.dec_precio_partida}"
+    assert p.dec_precio_capitulo == 4, f"Dec={p.dec_precio_capitulo}"
+    assert p.dec_cantrend == 3, f"DecCantRend={p.dec_cantrend}"
+    # Todas las partidas con descomposición deben coincidir AL CÉNTIMO con el archivo
+    for cod, c in p.conceptos.items():
+        if c.tipo == TipoConcepto.PARTIDA and c.hijos:
+            arch = getattr(c, "_precio_bc3", None)
+            if arch and arch > 0:
+                assert abs(arch - c.precio) < 0.0001, (
+                    f"{cod}: archivo={arch} calc={c.precio}"
+                )
+    # El PEM calculado debe coincidir con el del archivo
+    comp = p.comparar_importes_archivo()
+    assert abs(comp["diferencia_pem"]) < 0.01, (
+        f"PEM archivo={comp['pem_archivo']} calc={comp['pem_calculado']}"
+    )
+
+
+def test_round_trip_conserva_redondeos_k():
+    """Al escribir un BC3 debe emitirse el registro ~K, de modo que al reabrirlo
+    (en BC3Manager u otro programa) se conserve la configuración de redondeo y
+    los precios se recalculen igual. Verifica el ciclo leer→escribir→releer."""
+    ruta = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "Test_REDONDEO.bc3"
+    )
+    if not os.path.exists(ruta):
+        return
+    p1 = leer_bc3(ruta)
+    pem1 = p1.presupuesto_total()
+    with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
+        salida = tmp.name
+    try:
+        escribir_bc3(p1, salida)
+        p2 = leer_bc3(salida)
+        # El ~K debe haberse escrito y releído con los mismos decimales
+        assert p2.redondeo_activo, "El archivo escrito debe incluir ~K"
+        assert p2.dec_subtotal == p1.dec_subtotal
+        assert p2.dec_precio_partida == p1.dec_precio_partida
+        assert p2.dec_precio_capitulo == p1.dec_precio_capitulo
+        assert p2.dec_cantrend == p1.dec_cantrend
+        # Y el PEM debe ser idéntico tras el round-trip
+        assert abs(p2.presupuesto_total() - pem1) < 0.01, (
+            f"PEM cambió en round-trip: {pem1} -> {p2.presupuesto_total()}"
+        )
+    finally:
+        os.unlink(salida)
+
+
 def test_round_trip():
     p = leer_bc3(EJEMPLO)
     total_original = p.presupuesto_total()

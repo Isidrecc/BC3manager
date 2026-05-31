@@ -31,6 +31,7 @@ class EscritorBC3:
     def generar_texto(self) -> str:
         lineas: list[str] = []
         lineas.append(self._reg_V())
+        lineas.append(self._reg_K())   # coeficientes y redondeos
         # Conceptos
         for concepto in self.p.conceptos.values():
             lineas.append(self._reg_C(concepto))
@@ -61,8 +62,31 @@ class EscritorBC3:
         programa = "BC3Manager"
         return f"~V||{version}|{programa}||ANSI||{self.p.tipo_datos or '1'}||"
 
+    def _reg_K(self) -> str:
+        """Escribe el registro ~K con los decimales de redondeo y la moneda.
+
+        Orden FIEBDC del campo DECIMALES (verificado empíricamente):
+          DecDet \\ DecCantMed \\ DecCantRend \\ DecImp \\ DecNat \\ DecPar \\ Dec \\ MONEDA \\
+
+        Así, al reabrir el archivo (en BC3Manager o en otro programa) se
+        recupera exactamente la misma configuración de redondeo, y los precios
+        se recalculan igual que en el programa de origen.
+        """
+        p = self.p
+        decimales = (
+            f"\\{p.dec_parcial}\\{p.dec_cantmed}\\{p.dec_cantrend}\\"
+            f"{p.dec_subtotal}\\{p.dec_natural}\\{p.dec_precio_partida}\\"
+            f"{p.dec_precio_capitulo}\\{p.moneda or 'EUR'}\\"
+        )
+        return f"~K|{decimales}|0|"
+
     def _reg_C(self, c: Concepto) -> str:
-        return f"~C|{c.codigo}|{c.unidad}|{_escape(c.resumen)}|{_fmt(c.precio, 4)}||"
+        # Precio con 6 decimales (suficiente para DecPar/DecNat hasta 6) y sin
+        # ceros sobrantes — no truncar precios como 11.00965 (DecPar=5).
+        # 6º campo: tipo FIEBDC (_tipo_fiebdc) para que otros programas
+        # clasifiquen igual los conceptos (MO/MQ/MT/capítulo/partida).
+        tipo = getattr(c, "_tipo_fiebdc", "") or ""
+        return f"~C|{c.codigo}|{c.unidad}|{_escape(c.resumen)}|{_fmt(c.precio, 6)}||{tipo}|"
 
     def _reg_D(self, c: Concepto) -> str:
         trozos: list[str] = []

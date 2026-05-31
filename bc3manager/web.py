@@ -4,8 +4,9 @@ BC3Manager — Interfaz web local con edición inline.
 Uso:  python -m bc3manager.web
 """
 from __future__ import annotations
-import os, tempfile, webbrowser, json as _json
+import os, sys, tempfile, webbrowser, json as _json
 from threading import Timer
+from typing import Optional
 from flask import Flask, render_template_string, request, jsonify, send_file, Response
 from bc3manager.core.model import Presupuesto, TipoConcepto, Hijo, Concepto
 from bc3manager.io.lector import leer_bc3
@@ -35,15 +36,25 @@ def _arbol_json(p: Presupuesto) -> list[dict]:
         importe = p._importe_recursivo(codigo, codigo_padre) if codigo_padre else p.presupuesto_total()
         recursos = []
         if c.tipo == TipoConcepto.PARTIDA:
+            acum = 0.0   # acumulado para resolver líneas de porcentaje
             for h in c.hijos:
                 rec = p.get(h.codigo_hijo)
                 if rec:
+                    es_pct = Presupuesto.es_porcentaje(rec)
+                    if es_pct:
+                        # Importe = (acumulado de líneas previas) × coeficiente.
+                        # El "precio" mostrado es el % (p.ej. 7), no el precio unitario.
+                        imp = round(acum * h.cantidad, 4)
+                    else:
+                        imp = round(rec.precio * h.cantidad, 4)
+                    acum += imp
                     recursos.append({"codigo": rec.codigo, "unidad": rec.unidad, "resumen": rec.resumen,
                         "tipo_fiebdc": getattr(rec, "_tipo_fiebdc", "3"),
+                        "es_porcentaje": es_pct,
                         "precio": rec.precio, "precio_fmt": _fmt(rec.precio, 4),
                         "rendimiento": h.rendimiento, "rendimiento_fmt": _fmt(h.rendimiento, 4),
-                        "importe": round(rec.precio * h.cantidad, 4),
-                        "importe_fmt": _fmt(round(rec.precio * h.cantidad, 4), 4)})
+                        "importe": imp,
+                        "importe_fmt": _fmt(imp, 4)})
         lineas_med = []
         med_obj = c.mediciones.get(codigo_padre)
         if med_obj:
@@ -84,9 +95,12 @@ def _resp():
     p = _estado["presupuesto"]
     p.recalcular()          # garantiza precios actualizados tras cualquier edición
     pila = _estado.get("undo_stack")
+    redo = _estado.get("redo_stack")
     undo_disponible = bool(pila and len(pila) >= 2)
+    redo_disponible = bool(redo)
     return jsonify({"ok": True, "info": _info_json(p), "arbol": _arbol_json(p),
-                    "undo_disponible": undo_disponible})
+                    "undo_disponible": undo_disponible,
+                    "redo_disponible": redo_disponible})
 
 
 # ============ API ENDPOINTS ============
@@ -105,7 +119,7 @@ def api_cargar():
         _estado["presupuesto"] = p
         _estado["ruta_original"] = tmp.name
         _estado["nombre_archivo"] = archivo.filename or "presupuesto.bc3"
-        return jsonify({"info": _info_json(p), "arbol": _arbol_json(p), "archivo": _estado["nombre_archivo"]})
+        return jsonify(_payload_carga(p))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -119,30 +133,213 @@ def api_cargar_local():
         _estado["presupuesto"] = p
         _estado["ruta_original"] = ruta
         _estado["nombre_archivo"] = os.path.basename(ruta)
-        return jsonify({"info": _info_json(p), "arbol": _arbol_json(p), "archivo": _estado["nombre_archivo"]})
+        return jsonify(_payload_carga(p))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+def _payload_carga(p) -> dict:
+    """Construye la respuesta JSON común a las dos rutas de carga:
+    árbol + info + validación (precios, PEM) + Excel de validación.
+    Hace UNA sola validación completa y la reutiliza."""
+    val = p.validar_completo()                 # recalcula y compara todo
+    _estado["discrepancias"] = val["precios"]
+    _init_historial()                          # punto de partida para deshacer
+    nombre = _estado.get("nombre_archivo", "presupuesto.bc3")
+    # Volcado a consola
+    _log_discrepancias(p, nombre)
+    # Excel automático
+    ruta_xlsx = _generar_validacion_xlsx_seguro(p)
+    _estado["ruta_validacion_xlsx"] = ruta_xlsx
+    if ruta_xlsx:
+        _safe_print(f"[OK] Excel de validacion generado en: {ruta_xlsx}")
+        _safe_print()
+    # PEM siempre presente (números reales aunque coincidan)
+    comp = p.comparar_importes_archivo()
+    pem = {
+        "archivo": comp["pem_archivo"],
+        "calculado": comp["pem_calculado"],
+        "diferencia": comp["diferencia_pem"],
+    }
+    return {"info": _info_json(p), "arbol": _arbol_json(p),
+            "archivo": nombre,
+            "discrepancias": val["precios"],
+            "mediciones_inconsistentes": len(val["mediciones"]),
+            "pem": pem,
+            "validacion_xlsx": ruta_xlsx}
 
 @app.route("/api/tiene_archivo")
 def api_tiene_archivo():
     """Devuelve si hay un archivo pasado por argumento para carga automática."""
     return jsonify({"tiene": bool(_estado.get("ruta_arg"))})
 
-def _autoguardar():
-    """Guarda el presupuesto actual y apila un snapshot para undo (máx 20)."""
-    from collections import deque
+def _safe_print(*args, **kwargs) -> None:
+    """print() tolerante con consolas que no soportan UTF-8 (Windows cp1252)."""
+    try:
+        print(*args, **kwargs)
+    except UnicodeEncodeError:
+        # Sustituye caracteres no representables por '?' antes de imprimir
+        enc = getattr(sys.stdout, "encoding", "utf-8") or "utf-8"
+        line = " ".join(str(a) for a in args).encode(enc, errors="replace").decode(enc)
+        print(line, **kwargs)
+
+
+def _log_discrepancias(p, nombre_archivo: str) -> None:
+    """Vuelca a consola TODAS las discrepancias entre el archivo BC3 y la
+    propagación recalculada (mediciones, precios, PEM).
+    Se ejecuta UNA vez al abrir el presupuesto."""
+    val = p.validar_completo()
+    sep = "=" * 78
+    subsep = "-" * 78
+    resumen = val["resumen"]
+
+    _safe_print()
+    _safe_print(sep)
+    _safe_print(f"  VALIDACION COMPLETA - {nombre_archivo}")
+    _safe_print(f"  Conceptos: {resumen['total_conceptos']}  "
+                f"Mediciones: {resumen['total_mediciones']}  "
+                f"PEM (propagado): {_fmt(resumen['pem_calculado'])} EUR")
+    _safe_print(sep)
+
+    n_med = len(val["mediciones"])
+    n_pre = len(val["precios"])
+    n_pem = 1 if val["pem"] else 0
+    total = n_med + n_pre + n_pem
+
+    if total == 0:
+        _safe_print("  [OK] La propagacion coincide con lo declarado en el archivo:")
+        _safe_print("       - Sumas de lineas de medicion coinciden con totales declarados")
+        _safe_print("       - Precios de partidas/capitulos coinciden con descomposicion")
+        _safe_print("       - PEM agregado coincide con suma de capitulos raiz")
+        _safe_print(sep)
+        _safe_print()
+        return
+
+    # ---- 1) Mediciones ----------------------------------------------------
+    _safe_print()
+    _safe_print(f"  [1] MEDICIONES  ({n_med} inconsistencia(s))")
+    _safe_print(subsep)
+    if not val["mediciones"]:
+        _safe_print("     OK. Suma de lineas == total declarado en todos los registros ~M.")
+    else:
+        _safe_print(f"     {'PARTIDA':<14} {'EN':<14} {'DECLARADA':>14}  "
+                    f"{'SUMA LINEAS':>14}  {'DIF':>10}")
+        _safe_print(f"     {'-'*14} {'-'*14} {'-'*14}  {'-'*14}  {'-'*10}")
+        for d in val["mediciones"][:30]:
+            _safe_print(
+                f"     {d['codigo']:<14} {d['padre']:<14} "
+                f"{_fmt(d['declarada'], 4):>14}  "
+                f"{_fmt(d['suma_lineas'], 4):>14}  "
+                f"{_fmt(d['diferencia'], 4):>10}"
+            )
+        if len(val["mediciones"]) > 30:
+            _safe_print(f"     ... y {len(val['mediciones']) - 30} mas")
+
+    # ---- 2) Precios -------------------------------------------------------
+    _safe_print()
+    _safe_print(f"  [2] PRECIOS  ({n_pre} inconsistencia(s))")
+    _safe_print(subsep)
+    if not val["precios"]:
+        _safe_print("     OK. Precios del archivo == precios recalculados desde descomposicion.")
+    else:
+        _safe_print(f"     {'CODIGO':<14} {'TIPO':<5} {'ARCHIVO':>14}  "
+                    f"{'CALCULADO':>14}  {'DIF':>10}  {'%':>7}  DESCRIPCION")
+        _safe_print(f"     {'-'*14} {'-'*5} {'-'*14}  {'-'*14}  {'-'*10}  {'-'*7}  {'-'*30}")
+        for d in val["precios"][:30]:
+            tipo = "CAP" if d["tipo"] == "capitulo" else "PAR"
+            _safe_print(
+                f"     {d['codigo']:<14} {tipo:<5} "
+                f"{_fmt(d['precio_bc3'], 4):>14}  "
+                f"{_fmt(d['precio_calculado'], 4):>14}  "
+                f"{_fmt(d['diferencia'], 2):>10}  "
+                f"{d['diferencia_pct']:>6.2f}%  "
+                f"{(d['resumen'] or '')[:40]}"
+            )
+        if len(val["precios"]) > 30:
+            _safe_print(f"     ... y {len(val['precios']) - 30} mas")
+
+    # ---- 3) PEM -----------------------------------------------------------
+    _safe_print()
+    _safe_print(f"  [3] PEM TOTAL")
+    _safe_print(subsep)
+    if not val["pem"]:
+        _safe_print("     OK (o sin precios congelados en capitulos raiz que comparar).")
+    else:
+        pem = val["pem"]
+        _safe_print(f"     PEM declarado en el archivo (suma capitulos raiz): "
+                    f"{_fmt(pem['pem_archivo'])} EUR")
+        _safe_print(f"     PEM propagado desde partidas:                     "
+                    f"{_fmt(pem['pem_calculado'])} EUR")
+        _safe_print(f"     Diferencia: {_fmt(pem['diferencia'])} EUR")
+
+    _safe_print(sep)
+    _safe_print()
+
+
+# ============ Historial Undo/Redo ============
+# Modelo estándar: `undo_stack` es una lista cuyo ÚLTIMO elemento es SIEMPRE el
+# estado actual. `redo_stack` guarda los estados deshechos.
+#   - Cargar archivo     → undo_stack=[S0], redo_stack=[]
+#   - Cada edición       → push del nuevo estado; se limpia redo_stack
+#   - Undo               → mueve la cima a redo_stack y restaura la nueva cima
+#   - Redo               → recupera de redo_stack y restaura
+_MAX_HISTORIAL = 50   # nº máximo de estados guardados (además del inicial)
+
+def _snapshot_texto():
+    """Devuelve el BC3 del estado actual como texto, o None si no hay obra."""
     from bc3manager.io.escritor import EscritorBC3
     p = _estado.get("presupuesto")
+    if not p:
+        return None
+    try:
+        return EscritorBC3(p).generar_texto()
+    except Exception:
+        return None
+
+def _init_historial():
+    """Reinicia el historial con el estado actual como punto de partida."""
+    snap = _snapshot_texto()
+    _estado["undo_stack"] = [snap] if snap is not None else []
+    _estado["redo_stack"] = []
+
+def _restaurar_snapshot(snapshot: str):
+    """Carga un snapshot (texto BC3) como presupuesto actual y lo guarda en disco."""
+    import tempfile, os
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".bc3",
+                                     encoding="cp1252", errors="replace",
+                                     delete=False, newline="") as tmp:
+        tmp.write(snapshot)
+        ruta_tmp = tmp.name
+    try:
+        p = leer_bc3(ruta_tmp)
+    finally:
+        os.unlink(ruta_tmp)
+    _estado["presupuesto"] = p
     ruta = _estado.get("ruta_original")
+    if ruta:
+        try:
+            escribir_bc3(p, ruta)
+        except Exception:
+            pass
+    return p
+
+def _autoguardar():
+    """Tras una edición: guarda en disco, apila el nuevo estado y limpia el redo."""
+    p = _estado.get("presupuesto")
     if not p:
         return
-    # Guardar snapshot en memoria ANTES de escribir (para poder deshacer)
-    try:
-        snapshot = EscritorBC3(p).generar_texto()
-        pila = _estado.setdefault("undo_stack", deque(maxlen=20))
-        pila.append(snapshot)
-    except Exception:
-        pass
+    # Apilar el nuevo estado como cima del historial
+    snap = _snapshot_texto()
+    if snap is not None:
+        pila = _estado.setdefault("undo_stack", [])
+        # Si la pila está vacía (no se inicializó al cargar), siembra el estado actual.
+        pila.append(snap)
+        # Limitar profundidad (conservamos el inicial + _MAX_HISTORIAL ediciones)
+        if len(pila) > _MAX_HISTORIAL + 1:
+            del pila[0:len(pila) - (_MAX_HISTORIAL + 1)]
+        # Cualquier edición nueva invalida la rama de rehacer
+        _estado["redo_stack"] = []
+    # Guardar en disco
+    ruta = _estado.get("ruta_original")
     if ruta:
         try:
             escribir_bc3(p, ruta)
@@ -151,30 +348,306 @@ def _autoguardar():
 
 @app.route("/api/undo", methods=["POST"])
 def api_undo():
-    """Deshace la última edición restaurando el snapshot anterior del stack."""
-    pila = _estado.get("undo_stack")
-    if not pila or len(pila) < 2:
-        return jsonify({"error": "No hay más pasos para deshacer"}), 400
-    pila.pop()                     # descarta el estado actual
-    snapshot = pila[-1]            # restaura el anterior (sin sacarlo)
-    import tempfile, io
+    """Deshace la última edición: restaura el estado anterior del historial."""
+    undo = _estado.get("undo_stack") or []
+    if len(undo) < 2:
+        return jsonify({"error": "No hay nada que deshacer"}), 400
     try:
-        # Escribir el snapshot a un fichero temporal y releerlo
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".bc3",
-                                         encoding="cp1252", errors="replace",
-                                         delete=False, newline="") as tmp:
-            tmp.write(snapshot)
-            ruta_tmp = tmp.name
-        p = leer_bc3(ruta_tmp)
-        import os; os.unlink(ruta_tmp)
-        _estado["presupuesto"] = p
-        # Guardar en disco si hay ruta original
-        ruta = _estado.get("ruta_original")
-        if ruta:
-            escribir_bc3(p, ruta)
-        return jsonify({"ok": True, "info": _info_json(p), "arbol": _arbol_json(p)})
+        actual = undo.pop()                       # quita el estado actual
+        _estado.setdefault("redo_stack", []).append(actual)
+        snapshot = undo[-1]                        # nueva cima = estado a restaurar
+        _restaurar_snapshot(snapshot)
+        return _resp()
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route("/api/redo", methods=["POST"])
+def api_redo():
+    """Rehace la última acción deshecha."""
+    redo = _estado.get("redo_stack") or []
+    if not redo:
+        return jsonify({"error": "No hay nada que rehacer"}), 400
+    try:
+        snapshot = redo.pop()
+        _estado.setdefault("undo_stack", []).append(snapshot)
+        _restaurar_snapshot(snapshot)
+        return _resp()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+def _generar_excel_validacion(p, ruta_destino: str) -> str:
+    """Genera un .xlsx con la comparación completa archivo vs propagado.
+    Hojas: Resumen, Importes partidas, Importes capitulos, Mediciones,
+    Precios, PEM, Detalle conceptos. Devuelve la ruta del fichero generado."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    val = p.validar_completo()
+    comp = p.comparar_importes_archivo()
+    wb = Workbook()
+
+    # Estilos compartidos
+    head_font = Font(bold=True, color="FFFFFF", size=11)
+    head_fill = PatternFill("solid", fgColor="2B6FD0")
+    ok_fill   = PatternFill("solid", fgColor="E8F5E9")
+    bad_fill  = PatternFill("solid", fgColor="FFEBEE")
+    bord = Border(
+        left=Side(style="thin", color="DDDDDD"),
+        right=Side(style="thin", color="DDDDDD"),
+        top=Side(style="thin", color="DDDDDD"),
+        bottom=Side(style="thin", color="DDDDDD"),
+    )
+
+    def write_header(ws, cols):
+        for i, c in enumerate(cols, 1):
+            cell = ws.cell(row=1, column=i, value=c)
+            cell.font = head_font
+            cell.fill = head_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = bord
+
+    def autosize(ws):
+        for col in ws.columns:
+            ml = max((len(str(c.value)) if c.value is not None else 0) for c in col)
+            ws.column_dimensions[col[0].column_letter].width = min(ml + 2, 60)
+
+    # ---- Hoja 1: Resumen ----
+    ws = wb.active
+    ws.title = "Resumen"
+    r = val["resumen"]
+    n_partidas_diff = sum(1 for d in comp["partidas"] if abs(d["diferencia"]) >= 0.01)
+    n_caps_diff = sum(1 for d in comp["capitulos"] if abs(d["diferencia"]) >= 0.01)
+    rows = [
+        ("Archivo", _estado.get("nombre_archivo", "")),
+        ("Conceptos en el presupuesto", r["total_conceptos"]),
+        ("Partidas analizadas", len(comp["partidas"])),
+        ("Capitulos analizados", len(comp["capitulos"])),
+        ("Mediciones (registros ~M)", r["total_mediciones"]),
+        ("", ""),
+        ("PEM declarado en el archivo (€)", comp["pem_archivo"]),
+        ("PEM propagado desde partidas (€)", comp["pem_calculado"]),
+        ("Diferencia PEM (€)",               comp["diferencia_pem"]),
+        ("", ""),
+        ("Partidas con diferencia archivo vs calc", n_partidas_diff),
+        ("Capitulos con diferencia archivo vs calc", n_caps_diff),
+        ("Mediciones con suma de lineas != total declarado", len(val["mediciones"])),
+        ("Precios con archivo != recalculado", len(val["precios"])),
+    ]
+    for i, (k, v) in enumerate(rows, 1):
+        c1 = ws.cell(row=i, column=1, value=k)
+        c2 = ws.cell(row=i, column=2, value=v)
+        c1.font = Font(bold=True)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            if "(€)" in k:
+                c2.number_format = "#,##0.00"
+                c2.alignment = Alignment(horizontal="right")
+        if k.startswith("Diferencia PEM") or k.startswith("Partidas con") or k.startswith("Capitulos con") or k.startswith("Mediciones con") or k.startswith("Precios con"):
+            es_bad = (isinstance(v, (int, float)) and abs(v) > 0.01)
+            c2.fill = bad_fill if es_bad else ok_fill
+    autosize(ws)
+
+    # ---- Hoja 2: Importes partidas (TODAS, no solo discrepancias) ----
+    ws = wb.create_sheet("Importes partidas")
+    write_header(ws, [
+        "Codigo", "En capitulo", "Descripcion", "Ud",
+        "Precio archivo", "Precio calc",
+        "Medicion",
+        "Importe archivo", "Importe calc",
+        "Diferencia", "% dif",
+    ])
+    for i, d in enumerate(comp["partidas"], 2):
+        row = [
+            d["codigo"], d["padre"], d["resumen"], d["unidad"],
+            d["precio_archivo"], d["precio_calc"],
+            d["medicion"],
+            d["importe_archivo"], d["importe_calc"],
+            d["diferencia"], d["diferencia_pct"],
+        ]
+        for j, v in enumerate(row, 1):
+            cell = ws.cell(row=i, column=j, value=v)
+            cell.border = bord
+            if isinstance(v, (int, float)):
+                cell.number_format = "#,##0.0000" if j <= 7 else "#,##0.00"
+                cell.alignment = Alignment(horizontal="right")
+            if j == 10 and isinstance(v, (int, float)) and abs(v) >= 0.01:
+                cell.fill = bad_fill
+    # Fila total al final
+    if comp["partidas"]:
+        fila_total = len(comp["partidas"]) + 2
+        tot_arch = sum(d["importe_archivo"] for d in comp["partidas"])
+        tot_calc = sum(d["importe_calc"] for d in comp["partidas"])
+        ws.cell(row=fila_total, column=1, value="TOTAL").font = Font(bold=True)
+        ws.cell(row=fila_total, column=8, value=round(tot_arch, 2)).font = Font(bold=True)
+        ws.cell(row=fila_total, column=9, value=round(tot_calc, 2)).font = Font(bold=True)
+        ws.cell(row=fila_total, column=10, value=round(tot_calc - tot_arch, 2)).font = Font(bold=True)
+        for j in (8, 9, 10):
+            c = ws.cell(row=fila_total, column=j)
+            c.number_format = "#,##0.00"
+            c.alignment = Alignment(horizontal="right")
+    autosize(ws)
+
+    # ---- Hoja 3: Importes capitulos (TODOS) ----
+    ws = wb.create_sheet("Importes capitulos")
+    write_header(ws, [
+        "Codigo", "En padre", "Descripcion",
+        "Precio archivo (~C)",
+        "Importe archivo", "Importe calc (suma hijos)",
+        "Diferencia", "% dif",
+    ])
+    for i, d in enumerate(comp["capitulos"], 2):
+        row = [
+            d["codigo"], d["padre"], d["resumen"],
+            d["precio_archivo"],
+            d["importe_archivo"], d["importe_calc"],
+            d["diferencia"], d["diferencia_pct"],
+        ]
+        for j, v in enumerate(row, 1):
+            cell = ws.cell(row=i, column=j, value=v)
+            cell.border = bord
+            if isinstance(v, (int, float)):
+                cell.number_format = "#,##0.0000" if j <= 4 else "#,##0.00"
+                cell.alignment = Alignment(horizontal="right")
+            if j == 7 and isinstance(v, (int, float)) and abs(v) >= 0.01:
+                cell.fill = bad_fill
+    autosize(ws)
+
+    # ---- Hoja 4: Mediciones ----
+    ws = wb.create_sheet("Mediciones")
+    write_header(ws, ["Partida", "En capitulo", "Descripcion",
+                      "Total declarado (~M)", "Suma de lineas",
+                      "Diferencia", "% diferencia"])
+    for i, d in enumerate(val["mediciones"], 2):
+        denom = max(abs(d["declarada"]), abs(d["suma_lineas"])) or 1
+        pct = abs(d["diferencia"]) / denom * 100
+        row = [d["codigo"], d["padre"], d["resumen"],
+               d["declarada"], d["suma_lineas"], d["diferencia"], round(pct, 2)]
+        for j, v in enumerate(row, 1):
+            cell = ws.cell(row=i, column=j, value=v)
+            cell.border = bord
+            if isinstance(v, (int, float)):
+                cell.number_format = "#,##0.0000"
+                cell.alignment = Alignment(horizontal="right")
+    autosize(ws)
+
+    # ---- Hoja 3: Precios ----
+    ws = wb.create_sheet("Precios")
+    write_header(ws, ["Codigo", "Tipo", "Descripcion",
+                      "Precio archivo (~C)", "Precio calculado",
+                      "Diferencia", "% diferencia"])
+    for i, d in enumerate(val["precios"], 2):
+        tipo = "Capitulo" if d["tipo"] == "capitulo" else "Partida"
+        row = [d["codigo"], tipo, d["resumen"],
+               d["precio_bc3"], d["precio_calculado"],
+               d["diferencia"], d["diferencia_pct"]]
+        for j, v in enumerate(row, 1):
+            cell = ws.cell(row=i, column=j, value=v)
+            cell.border = bord
+            if isinstance(v, (int, float)):
+                cell.number_format = "#,##0.0000"
+                cell.alignment = Alignment(horizontal="right")
+    autosize(ws)
+
+    # ---- Hoja 4: PEM ----
+    ws = wb.create_sheet("PEM")
+    if val["pem"]:
+        pem = val["pem"]
+        rows = [
+            ("PEM declarado en archivo (€)",     pem["pem_archivo"]),
+            ("PEM propagado desde partidas (€)", pem["pem_calculado"]),
+            ("Diferencia (€)",                   pem["diferencia"]),
+        ]
+    else:
+        rows = [
+            ("Estado", "OK — sin discrepancias significativas a nivel PEM"),
+            ("PEM (€)", r["pem_calculado"]),
+        ]
+    for i, (k, v) in enumerate(rows, 1):
+        c1 = ws.cell(row=i, column=1, value=k); c1.font = Font(bold=True)
+        c2 = ws.cell(row=i, column=2, value=v)
+        if isinstance(v, (int, float)):
+            c2.number_format = "#,##0.00"
+            c2.alignment = Alignment(horizontal="right")
+    autosize(ws)
+
+    # ---- Hoja 5: Detalle conceptos ----
+    # Volcado completo: para cada concepto, qué dice el archivo y qué el cálculo.
+    ws = wb.create_sheet("Detalle conceptos")
+    write_header(ws, ["Codigo", "Tipo", "Descripcion", "Unidad",
+                      "Precio archivo", "Precio calculado",
+                      "Suma mediciones", "Importe (precio_calc x med)"])
+    fila = 2
+    for cod, c in p.conceptos.items():
+        pbc3 = getattr(c, "_precio_bc3", None)
+        # Suma total de mediciones de este concepto en todos los padres
+        suma_med = 0.0
+        for m in c.mediciones.values():
+            suma_med += sum(ln.subtotal for ln in m.lineas)
+        importe = round(c.precio * suma_med, 2) if suma_med else 0.0
+        row = [
+            cod, c.tipo.value, c.resumen, c.unidad,
+            pbc3 if pbc3 is not None else "", c.precio,
+            round(suma_med, 4), importe,
+        ]
+        for j, v in enumerate(row, 1):
+            cell = ws.cell(row=fila, column=j, value=v)
+            cell.border = bord
+            if isinstance(v, (int, float)):
+                cell.number_format = "#,##0.0000"
+                cell.alignment = Alignment(horizontal="right")
+        fila += 1
+    autosize(ws)
+
+    wb.save(ruta_destino)
+    return ruta_destino
+
+
+def _ruta_validacion_xlsx() -> str:
+    """Decide dónde guardar el Excel de validación: junto al BC3 si la ruta
+    es real, o en temp si vino por upload web."""
+    ruta_bc3 = _estado.get("ruta_original") or ""
+    nombre_bc3 = _estado.get("nombre_archivo") or "presupuesto.bc3"
+    base = os.path.splitext(os.path.basename(nombre_bc3))[0]
+    nombre_xlsx = f"validacion_{base}.xlsx"
+    if ruta_bc3:
+        # ¿Está en temp? entonces guardar también en temp
+        try:
+            es_temporal = os.path.commonpath([ruta_bc3, tempfile.gettempdir()]) == tempfile.gettempdir()
+        except (ValueError, OSError):
+            es_temporal = False
+        if es_temporal:
+            return os.path.join(tempfile.gettempdir(), nombre_xlsx)
+        # Junto al BC3 original
+        return os.path.join(os.path.dirname(os.path.abspath(ruta_bc3)), nombre_xlsx)
+    return os.path.join(tempfile.gettempdir(), nombre_xlsx)
+
+
+def _generar_validacion_xlsx_seguro(p) -> Optional[str]:
+    """Genera el Excel de validación y devuelve la ruta. Si falla, devuelve None
+    sin reventar la carga del archivo."""
+    try:
+        destino = _ruta_validacion_xlsx()
+        _generar_excel_validacion(p, destino)
+        return destino
+    except Exception as e:
+        _safe_print(f"[AVISO] No se pudo generar el Excel de validacion: {e}")
+        return None
+
+
+@app.route("/api/validacion_xlsx")
+def api_validacion_xlsx():
+    """Descarga manual del Excel de validación (lo genera al vuelo)."""
+    p = _estado.get("presupuesto")
+    if not p: return "No hay presupuesto cargado", 400
+    try:
+        tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False); tmp.close()
+        _generar_excel_validacion(p, tmp.name)
+    except ImportError:
+        return "Falta el modulo openpyxl. Instala: pip install openpyxl", 500
+    nombre = (_estado.get("nombre_archivo") or "presupuesto.bc3").rsplit(".", 1)[0]
+    return send_file(
+        tmp.name, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True, download_name=f"validacion_{nombre}.xlsx",
+    )
 
 @app.route("/api/informe")
 def api_informe():
@@ -249,6 +722,8 @@ def api_editar():
             p.copiar_concepto(d["codigo"], d["padre_destino"], d.get("antes_de"))
         else:
             return jsonify({"error": f"Acción desconocida: {accion}"}), 400
+        # Ya no es necesario invalidar precio_es_dato — recalcular() suma siempre
+        # desde los descendientes (los precios de capítulo del archivo se ignoran).
         _autoguardar()
         return _resp()
     except Exception as e:
@@ -286,7 +761,10 @@ button{cursor:pointer;font-family:inherit}
 .detail-panel{flex:1;overflow-y:auto;padding:20px 24px;min-width:380px}
 .tree-scroll{overflow:auto;flex:1}
 /* Tabla del árbol */
-.ttable{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+/* min-width garantiza que la columna Descripción no se colapse cuando el panel
+   es estrecho. Las columnas fijas suman ~448px; reservamos ~260px para la
+   descripción. Si no cabe, el contenedor (.tree-scroll) hace scroll. */
+.ttable{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;min-width:710px}
 .ttable thead{position:sticky;top:0;z-index:5}
 .ttable thead th{background:var(--bg-card);color:var(--text-dim);text-align:left;padding:9px 8px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border);user-select:none}
 .ttable thead th.num{text-align:right}
@@ -298,12 +776,12 @@ button{cursor:pointer;font-family:inherit}
 .ttable .cod{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim)}
 .ttable .imp{color:var(--green);font-weight:500}
 /* Columnas (anchos) */
-.col-cod{width:130px}
-.col-ud{width:60px}
-.col-cant{width:80px}
-.col-precio{width:80px}
-.col-imp{width:100px}
-.col-act{width:74px}
+.col-cod{width:112px}
+.col-ud{width:46px}
+.col-cant{width:72px}
+.col-precio{width:72px}
+.col-imp{width:92px}
+.col-act{width:54px}
 /* Fila por tipo */
 .ttable tr.row-cap td{background:var(--bg-card)}
 .ttable tr.row-cap td.col-resumen{font-weight:600}
@@ -427,6 +905,7 @@ button{cursor:pointer;font-family:inherit}
 <button class="dropdown-item" onclick="descargarInforme('resumen')">Resumen</button>
 </div></div>
 <button class="btn" id="undoBtn" onclick="undoAction()" title="Deshacer (Ctrl+Z)" style="display:none">↩ Deshacer</button>
+<button class="btn" id="redoBtn" onclick="redoAction()" title="Rehacer (Ctrl+Y)" style="display:none">↪ Rehacer</button>
 <button class="btn" onclick="exportarBC3()">Exportar BC3</button>
 <button class="btn" onclick="addCapitulo('')">+ Capítulo</button>
 <button class="btn" id="themeBtn" onclick="toggleTheme()" title="Cambiar tema">🌙</button>
@@ -434,6 +913,12 @@ button{cursor:pointer;font-family:inherit}
 <div id="uploadScreen" class="upload-screen"><div class="upload-box" id="uploadBox" onclick="document.getElementById('fileInput').click()" ondragover="event.preventDefault();this.classList.add('drag')" ondragleave="this.classList.remove('drag')" ondrop="event.preventDefault();this.classList.remove('drag');handleDrop(event)"><h2>Abre un archivo BC3</h2><p>Arrastra aquí o haz clic</p><button class="btn btn-accent">Seleccionar archivo</button></div></div>
 <div id="mainApp" style="display:none">
 <div id="tempBanner" style="display:none;background:rgba(240,180,41,.12);border-bottom:1px solid var(--amber);padding:8px 32px;font-size:12px;color:var(--amber)">⚠ Este archivo está en una carpeta temporal. Tus cambios se guardan ahí, pero el archivo puede borrarse al reiniciar el equipo. Exporta a BC3 para conservarlo.</div>
+<div id="discBanner" style="display:none;background:rgba(239,107,107,.12);border-bottom:1px solid var(--red);padding:8px 32px;font-size:12px;color:var(--red);display:flex;align-items:center;gap:12px">
+  <span id="discBannerText">⚠ Precios del archivo no coinciden con el recálculo</span>
+  <button class="btn btn-sm" onclick="mostrarDiscrepancias()" style="margin-left:auto">Ver detalle</button>
+  <button class="btn btn-sm" onclick="window.open('/api/validacion_xlsx','_blank')" title="Descargar Excel completo">📊 Excel</button>
+  <button class="btn btn-sm" onclick="document.getElementById('discBanner').style.display='none'" title="Ocultar">×</button>
+</div>
 <div class="stats-bar" id="statsBar"></div>
 <div class="main">
   <div class="tree-panel">
@@ -452,10 +937,29 @@ button{cursor:pointer;font-family:inherit}
   <div class="detail-panel" id="detailPanel"><div class="detail-empty">Selecciona una partida</div></div>
 </div></div>
 <div id="loadingOverlay" style="display:none;position:fixed;inset:0;background:rgba(15,17,23,.85);z-index:200"><div class="loading" style="height:100%"><div class="spinner"></div><span>Leyendo BC3...</span></div></div>
+<div id="discModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:250;align-items:center;justify-content:center">
+  <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);max-width:900px;width:90%;max-height:80vh;display:flex;flex-direction:column;box-shadow:var(--shadow)">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px">
+      <strong style="font-size:14px;color:var(--red)">Discrepancias de precios</strong>
+      <span id="discCount" style="font-size:12px;color:var(--text-dim)"></span>
+      <button class="btn btn-sm" onclick="window.open('/api/validacion_xlsx','_blank')" style="margin-left:auto" title="Exporta hoja Excel con resumen, mediciones, precios, PEM y detalle por concepto">📊 Exportar Excel</button>
+      <button class="btn btn-sm" onclick="document.getElementById('discModal').style.display='none'">Cerrar</button>
+    </div>
+    <div style="padding:8px 20px;font-size:12px;color:var(--text-dim);border-bottom:1px solid var(--border);line-height:1.5">
+      Los conceptos siguientes tienen un precio en el archivo BC3 que <u>no coincide</u> con el resultado de sumar sus componentes.
+      Causas habituales: precios redondeados en el archivo, descomposiciones incompletas, o el archivo se generó con precios "congelados" (Presto 8.8).
+      <br><strong>Capítulos</strong>: conservan el precio del archivo hasta que edites algo.
+      <strong>Partidas</strong>: siempre muestran el precio calculado desde sus recursos (el del archivo se considera obsoleto).
+    </div>
+    <div id="discList" style="overflow:auto;flex:1;padding:0 20px 16px"></div>
+  </div>
+</div>
 
 <script>
 let treeData=[], fileInfo={}, curNode=null, curParent='';
 let _clipboard=null;        // {codigo,resumen} o [{codigo,padre},...] para selección múltiple
+let _discrepancias=[];      // Discrepancias entre precio BC3 y precio recalculado al cargar
+let _pemValidacion=null;    // {archivo, calculado, diferencia} comparación PEM al cargar
 let _tabDescomp=null;       // instancia Tabulator — desglose
 let _tabMedic=null;         // instancia Tabulator — mediciones
 let selectedNodes=[];       // [{codigo,padre}] — selección múltiple en árbol
@@ -471,9 +975,81 @@ function sendFile(file){
     document.getElementById('loadingOverlay').style.display='none';
     if(data.error){alert('Error: '+data.error);return}
     fileInfo=data.info;treeData=data.arbol;
+    _discrepancias=data.discrepancias||[];
+    _pemValidacion=data.pem||null;
     if(data.archivo)document.getElementById('fileName').textContent=data.archivo;
-    renderApp()
+    renderApp();
+    actualizarBannerDiscrepancias();
   }).catch(err=>{document.getElementById('loadingOverlay').style.display='none';alert('Error: '+err)})
+}
+
+// Formatea un número a formato europeo con 2 decimales
+function _fmtEur(n){
+  return Number(n).toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+
+// Muestra/oculta el banner. Salta si hay discrepancias de precio O diferencia de PEM.
+function actualizarBannerDiscrepancias(){
+  const b=document.getElementById('discBanner');
+  const t=document.getElementById('discBannerText');
+  if(!b)return;
+  const nPrecio=_discrepancias?_discrepancias.length:0;
+  const difPem=_pemValidacion?Math.abs(_pemValidacion.diferencia):0;
+  const hayPem=difPem>=0.01;
+  if(nPrecio>0 || hayPem){
+    let msg='⚠ ';
+    const partes=[];
+    if(hayPem){
+      const d=_pemValidacion.diferencia;
+      partes.push(`PEM archivo ${_fmtEur(_pemValidacion.archivo)} € vs calculado ${_fmtEur(_pemValidacion.calculado)} € (${d>=0?'+':''}${_fmtEur(d)} €)`);
+    }
+    if(nPrecio>0){
+      partes.push(`${nPrecio} concepto${nPrecio>1?'s':''} con precio inconsistente`);
+    }
+    t.textContent=msg+partes.join('  ·  ');
+    b.style.display='flex';
+  }else{
+    b.style.display='none';
+  }
+}
+
+function mostrarDiscrepancias(){
+  const m=document.getElementById('discModal');
+  const c=document.getElementById('discCount');
+  const l=document.getElementById('discList');
+  c.textContent=`${_discrepancias.length} concepto${_discrepancias.length===1?'':'s'}`;
+  // Bloque PEM destacado arriba
+  let pemHtml='';
+  if(_pemValidacion){
+    const d=_pemValidacion.diferencia;
+    const cuadra=Math.abs(d)<0.01;
+    pemHtml=`<div style="margin-top:12px;padding:12px 16px;border-radius:var(--radius);
+      background:${cuadra?'var(--green-soft)':'rgba(239,107,107,.12)'};
+      border:1px solid ${cuadra?'var(--green)':'var(--red)'}">
+      <strong>PEM total</strong><br>
+      Archivo: <b>${_fmtEur(_pemValidacion.archivo)} €</b> &nbsp;·&nbsp;
+      Calculado: <b>${_fmtEur(_pemValidacion.calculado)} €</b> &nbsp;·&nbsp;
+      Diferencia: <b style="color:${cuadra?'var(--green)':'var(--red)'}">${d>=0?'+':''}${_fmtEur(d)} €</b>
+      ${cuadra?' ✓':''}
+    </div>`;
+  }
+  l.innerHTML=pemHtml+`<table class="dtable" style="margin-top:12px">
+    <tr><th>Código</th><th>Tipo</th><th>Descripción</th>
+        <th class="num">Precio archivo</th>
+        <th class="num">Precio calculado</th>
+        <th class="num">Diferencia</th>
+        <th class="num">%</th></tr>
+    ${_discrepancias.map(d=>`<tr>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(d.codigo)}</td>
+      <td><span class="tt-badge ${d.tipo==='capitulo'?'badge-cap':'badge-part'}">${d.tipo==='capitulo'?'Cap':'Part'}</span></td>
+      <td>${esc(d.resumen)}</td>
+      <td class="num">${esc(d.precio_bc3.toString().replace('.',','))}</td>
+      <td class="num">${esc(d.precio_calculado.toString().replace('.',','))}</td>
+      <td class="num" style="color:${d.diferencia>=0?'var(--green)':'var(--red)'}">${(d.diferencia>=0?'+':'')+esc(d.diferencia.toString().replace('.',','))}</td>
+      <td class="num">${esc(d.diferencia_pct.toString().replace('.',','))}%</td>
+    </tr>`).join('')}
+  </table>`;
+  m.style.display='flex';
 }
 
 // ---- API ----
@@ -481,13 +1057,19 @@ async function api(data){
   const r=await fetch('/api/editar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
   const j=await r.json();if(j.error){alert(j.error);return null}return j
 }
+// Actualiza la visibilidad de los botones Deshacer/Rehacer según la respuesta
+function _actualizarUndoRedo(j){
+  const u=document.getElementById('undoBtn');
+  if(u)u.style.display=(j.undo_disponible?'':'none');
+  const r=document.getElementById('redoBtn');
+  if(r)r.style.display=(j.redo_disponible?'':'none');
+}
 function refresh(j){
   if(!j)return;
   // Capturar la celda con foco ANTES de destruir el DOM (Tab/Enter habrán ya movido el foco a la siguiente celda)
   const savedFocus=_captureFocusPos();
   fileInfo=j.info;treeData=j.arbol;
-  const undoBtn=document.getElementById('undoBtn');
-  if(undoBtn)undoBtn.style.display=(j.undo_disponible?'':'none');
+  _actualizarUndoRedo(j);
   renderStats();renderTree();
   if(curNode){const f=findNode(treeData,curNode.codigo);if(f){curNode=f;renderDetail(f)}else{curNode=null;if(_pasteHandler){document.removeEventListener('paste',_pasteHandler);_pasteHandler=null}document.getElementById('detailPanel').innerHTML='<div class="detail-empty">Concepto eliminado</div>'}}
   // Restaurar foco en la celda equivalente del nuevo DOM
@@ -526,7 +1108,7 @@ async function silentSave(params){
   const r=await fetch('/api/editar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(params)});
   const j=await r.json();
   if(j&&j.error){alert(j.error);return null;}
-  if(j){treeData=j.arbol;fileInfo=j.info;const u=document.getElementById('undoBtn');if(u)u.style.display=(j.undo_disponible?'':'none');}
+  if(j){treeData=j.arbol;fileInfo=j.info;_actualizarUndoRedo(j);}
   return j;
 }
 
@@ -536,32 +1118,63 @@ async function calcSave(params,preloaded){
   if(!j)return null;
   treeData=j.arbol;fileInfo=j.info;
   renderStats();renderTree();
-  const u=document.getElementById('undoBtn');if(u)u.style.display=(j.undo_disponible?'':'none');
+  _actualizarUndoRedo(j);
   if(curNode){
-    const nNew=findNode(treeData,curNode.codigo);
+    // Buscar nodo equivalente en el árbol nuevo (mismo código Y mismo padre)
+    const nNew=_findNodeInParent(treeData,curNode.codigo,curParent);
     if(nNew){
       curNode=nNew;
       _updateDetailHeader(nNew);
-      if(_tabDescomp&&nNew.recursos){
-        _tabDescomp.updateData(nNew.recursos.map(r=>({
-          codigo:r.codigo,
-          rendimiento:r.rendimiento,precio:r.precio,
-          importe:r.importe,importe_fmt:r.importe_fmt
-        })));
+      // replaceData (no updateData): sustituye TODAS las filas con datos frescos del servidor.
+      // Necesario porque rendimiento/precio del recurso pueden cambiar y el importe se
+      // recalcula en el servidor. updateData solo refresca campos específicos.
+      if(_tabDescomp){
+        const recs=(nNew.recursos||[]).map(r=>({...r}));
+        try{_tabDescomp.replaceData(recs);}catch(e){console.error('replaceData descomp:',e);}
       }
-      if(_tabMedic&&nNew.lineas_medicion){
-        _tabMedic.updateData(nNew.lineas_medicion.map((ln,i)=>({_idx:i,subtotal:ln.subtotal,subtotal_fmt:ln.subtotal_fmt})));
+      if(_tabMedic){
+        const meds=(nNew.lineas_medicion||[]).map((ln,i)=>({...ln,_idx:i}));
+        try{_tabMedic.replaceData(meds);}catch(e){console.error('replaceData medic:',e);}
       }
     }
   }
   return j;
 }
+// Busca un nodo por (codigo, padre) para evitar coger un homónimo de otro capítulo
+function _findNodeInParent(nodes,cod,padre){
+  for(const n of nodes){
+    if(n.codigo===cod&&n.padre===padre)return n;
+    if(n.hijos){const f=_findNodeInParent(n.hijos,cod,padre);if(f)return f;}
+  }
+  // Fallback: si no se encontró con el padre exacto, busca solo por código
+  return findNode(nodes,cod);
+}
 
-// Actualiza las cabeceras numéricas del panel de detalle sin re-renderizar
+// Renderiza el contenido interno de la celda Cantidad de la cabecera
+// (editable si la partida no tiene mediciones, bloqueada y calculada si las tiene)
+function _renderHeaderCant(nodo,cod,pc){
+  return (nodo.lineas_medicion&&nodo.lineas_medicion.length>0)
+    ? `<span class="ecell" contenteditable="false" style="cursor:default;opacity:.7" title="Calculada desde las mediciones">${esc(nodo.medicion_fmt||'0,00')}</span> <span style="font-size:11px;color:var(--text-muted)">🔒</span>`
+    : `${ec(nodo.medicion_fmt||'0,00',true,v=>setCantidadSimple(cod,pc,parseNum(v)),true)}`;
+}
+// Renderiza el contenido interno de la celda Precio
+function _renderHeaderPrecio(nodo,cod){
+  return (nodo.recursos&&nodo.recursos.length>0)
+    ? `<span class="ecell" contenteditable="false" style="cursor:default;opacity:.7" title="Calculado desde la descomposición">${esc(nodo.precio_fmt)}</span> € <span style="font-size:11px;color:var(--text-muted)">🔒</span>`
+    : `${ec(nodo.precio_fmt,true,v=>api({accion:'precio',codigo:cod,valor:parseNum(v)}).then(refresh),true)} €`;
+}
+// Actualiza las cabeceras numéricas del panel de detalle sin re-renderizar todo el panel.
+// IMPORTANTE: re-renderiza el contenido interno (no solo el text), para que la estructura
+// editable/bloqueada cambie cuando se añade la primera línea o el primer recurso.
 function _updateDetailHeader(nodo){
-  const p=document.getElementById('dh-precio');if(p)p.textContent=nodo.precio_fmt;
-  const i=document.getElementById('dh-importe');if(i)i.textContent=nodo.importe_fmt+' €';
-  const c=document.getElementById('dh-cant');if(c)c.textContent=nodo.medicion_fmt||'0,00';
+  const cod=nodo.codigo;
+  const pc=curParent;
+  const cantEl=document.getElementById('dh-cant');
+  if(cantEl)cantEl.innerHTML=_renderHeaderCant(nodo,cod,pc);
+  const precEl=document.getElementById('dh-precio');
+  if(precEl)precEl.innerHTML=_renderHeaderPrecio(nodo,cod);
+  const impEl=document.getElementById('dh-importe');
+  if(impEl)impEl.textContent=nodo.importe_fmt+' €';
 }
 
 // Número europeo → float (para valores ya numéricos no usar parseNum)
@@ -578,6 +1191,41 @@ function _initTabDescomp(nodo,cod){
   const TLBL={'1':'MO','2':'MQ','3':'MT','4':'AUX'};
   const TCLS={'1':'badge-mo','2':'badge-mq','3':'badge-mt','4':'badge-aux'};
   const data=(nodo.recursos||[]).map(r=>({...r}));
+
+  // Guarda una fila nueva (_isNew) cuando el usuario rellena el codigo
+  function _commitNewRecurso(row){
+    const d=row.getData();
+    if(!d.codigo||!d.codigo.trim())return;
+    row.update({_isNew:false});
+    api({accion:'add_recurso',codigo_partida:cod,codigo_recurso:d.codigo.trim(),
+      rendimiento:parseNum(String(d.rendimiento||1))||1,
+      precio:parseNum(String(d.precio||0))||0,
+      unidad:d.unidad||'',resumen:d.resumen||''}).then(j=>{
+      if(!j){row.update({_isNew:true});return;}
+      calcSave(null,j);
+    });
+  }
+
+  // Columna numérica con cellEdited PROPIO — sin mutatorEdit (más predecible)
+  const numColDescomp=(title,field,width,onChange)=>({
+    title,field,editor:'input',width,hozAlign:'right',cssClass:'tab-num',
+    formatter:'money',formatterParams:{decimal:',',thousand:'.',symbol:'',precision:4},
+    cellEdited:function(cell){
+      const row=cell.getRow();const d=row.getData();
+      // Convertir el string del editor a número
+      const nVal=parseNum(String(cell.getValue()));
+      const oVal=parseNum(String(cell.getOldValue()));
+      // Reescribir la celda con el número (para que el formatter lo muestre bien)
+      if(cell.getValue()!==nVal){
+        // setValue(value, mutate=false): no dispara cellEdited otra vez
+        try{cell.setValue(nVal,false);}catch(e){}
+      }
+      if(d._isNew){_commitNewRecurso(row);return;}
+      if(nVal===oVal)return;
+      onChange(d,nVal);
+    }
+  });
+
   _tabDescomp=new Tabulator(el,{
     data, index:'codigo', layout:'fitColumns',
     movableRows:true, selectable:true, reactiveData:false,
@@ -586,18 +1234,41 @@ function _initTabDescomp(nodo,cod){
     columns:[
       {rowHandle:true,formatter:'handle',headerSort:false,width:26,minWidth:26},
       {title:'Código',field:'codigo',editor:'input',width:110,
-       formatter:c=>`<span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim)">${esc(c.getValue()||'')}</span>`},
+       formatter:c=>`<span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim)">${esc(c.getValue()||'')}</span>`,
+       cellEdited:function(cell){
+         const row=cell.getRow();const d=row.getData();
+         const nv=cell.getValue();const ov=cell.getOldValue();
+         if(d._isNew){_commitNewRecurso(row);return;}
+         if(nv===ov||!nv||!nv.trim())return;
+         silentSave({accion:'codigo',codigo_viejo:ov,codigo_nuevo:nv.trim()});
+       }},
       {title:'Tipo',field:'tipo_fiebdc',editor:'list',width:70,
        editorParams:{values:{'1':'MO','2':'MQ','3':'MT','4':'AUX'},clearable:false},
-       formatter:c=>{const v=c.getValue()||'3';return `<span class="tt-badge ${TCLS[v]||'badge-mt'}">${TLBL[v]||'MT'}</span>`;}},
-      {title:'Descripción',field:'resumen',editor:'input'},
-      {title:'Ud',field:'unidad',editor:'input',width:58},
-      {title:'Rendimiento',field:'rendimiento',editor:'input',width:95,hozAlign:'right',cssClass:'tab-num',
-       formatter:'money',formatterParams:{decimal:',',thousand:'.',symbol:'',precision:4},
-       mutatorEdit:v=>parseNum(String(v))},
-      {title:'Precio',field:'precio',editor:'input',width:80,hozAlign:'right',cssClass:'tab-num',
-       formatter:'money',formatterParams:{decimal:',',thousand:'.',symbol:'',precision:4},
-       mutatorEdit:v=>parseNum(String(v))},
+       formatter:c=>{const v=c.getValue()||'3';return `<span class="tt-badge ${TCLS[v]||'badge-mt'}">${TLBL[v]||'MT'}</span>`;},
+       cellEdited:function(cell){
+         const d=cell.getRow().getData();
+         if(d._isNew)return;
+         if(cell.getValue()===cell.getOldValue())return;
+         silentSave({accion:'tipo_recurso',codigo:d.codigo,tipo_fiebdc:cell.getValue()});
+       }},
+      {title:'Descripción',field:'resumen',editor:'input',
+       cellEdited:function(cell){
+         const d=cell.getRow().getData();
+         if(d._isNew)return;
+         if(cell.getValue()===cell.getOldValue())return;
+         silentSave({accion:'resumen',codigo:d.codigo,valor:cell.getValue()});
+       }},
+      {title:'Ud',field:'unidad',editor:'input',width:58,
+       cellEdited:function(cell){
+         const d=cell.getRow().getData();
+         if(d._isNew)return;
+         if(cell.getValue()===cell.getOldValue())return;
+         silentSave({accion:'unidad',codigo:d.codigo,valor:cell.getValue()});
+       }},
+      numColDescomp('Rendimiento','rendimiento',95,
+        (d,nv)=>calcSave({accion:'rendimiento',codigo_padre:cod,codigo_hijo:d.codigo,valor:nv})),
+      numColDescomp('Precio','precio',80,
+        (d,nv)=>calcSave({accion:'precio',codigo:d.codigo,valor:nv})),
       {title:'Importe',field:'importe_fmt',editable:false,width:82,hozAlign:'right',cssClass:'tab-num',
        formatter:c=>`<span style="color:var(--green);font-weight:500">${esc(c.getValue()||'')}</span>`},
       {title:'',field:'_del',width:34,hozAlign:'center',headerSort:false,
@@ -613,33 +1284,6 @@ function _initTabDescomp(nodo,cod){
          });
        }},
     ],
-    cellEdited:function(cell){
-      const row=cell.getRow();const d=row.getData();
-      const field=cell.getField();const nv=cell.getValue();const ov=cell.getOldValue();
-      if(nv===ov)return;
-      if(d._isNew){
-        if(field==='codigo'&&nv&&nv.trim()){
-          row.update({_isNew:false});
-          api({accion:'add_recurso',codigo_partida:cod,codigo_recurso:nv.trim(),
-            rendimiento:toNum(d.rendimiento_fmt)||1,precio:toNum(d.precio_fmt)||0,
-            unidad:d.unidad||'',resumen:d.resumen||''}).then(j=>{
-            if(!j){row.update({_isNew:true});return;}
-            calcSave(null,j);
-          });
-        }
-        return;
-      }
-      switch(field){
-        case 'codigo': if(nv&&nv.trim())silentSave({accion:'codigo',codigo_viejo:ov,codigo_nuevo:nv.trim()});break;
-        case 'tipo_fiebdc': silentSave({accion:'tipo_recurso',codigo:d.codigo,tipo_fiebdc:nv});break;
-        case 'resumen': silentSave({accion:'resumen',codigo:d.codigo,valor:nv});break;
-        case 'unidad': silentSave({accion:'unidad',codigo:d.codigo,valor:nv});break;
-        case 'rendimiento':
-          if(nv!==ov)calcSave({accion:'rendimiento',codigo_padre:cod,codigo_hijo:d.codigo,valor:nv});break;
-        case 'precio':
-          if(nv!==ov)calcSave({accion:'precio',codigo:d.codigo,valor:nv});break;
-      }
-    },
     rowMoved:function(row){
       const rows=_tabDescomp.getRows();
       const idx=rows.indexOf(row);
@@ -974,7 +1618,7 @@ function mkTreeRow(nodo,level,parentCod){
 
   tr.innerHTML=
     `<td class="col-cod cod">${ec(nodo.codigo,true,v=>api({accion:'codigo',codigo_viejo:nodo.codigo,codigo_nuevo:v.trim()}).then(refresh),false)}</td>`+
-    `<td class="col-resumen">${indentHtml}${toggleHtml}${badgeHtml}${ec(nodo.resumen,true,v=>api({accion:'resumen',codigo:nodo.codigo,valor:v}).then(refresh),false)}</td>`+
+    `<td class="col-resumen" title="${esc(nodo.resumen||'')}">${indentHtml}${toggleHtml}${badgeHtml}${ec(nodo.resumen,true,v=>api({accion:'resumen',codigo:nodo.codigo,valor:v}).then(refresh),false)}</td>`+
     `<td class="col-ud">${isCap?'':ec(nodo.unidad||'',true,v=>api({accion:'unidad',codigo:nodo.codigo,valor:v}).then(refresh),false)}</td>`+
     `<td class="num col-cant">${cantHtml}</td>`+
     `<td class="num col-precio">${precioHtml}</td>`+
@@ -1363,18 +2007,12 @@ function renderDetail(nodo){
     <div class="detail-name">${ec(nodo.resumen,true,v=>api({accion:'resumen',codigo:cod,valor:v}).then(refresh),false)}</div>
     <div class="detail-meta">
       <div class="detail-meta-item"><span class="detail-meta-label">Unidad</span><span class="detail-meta-value">${ec(nodo.unidad,true,v=>api({accion:'unidad',codigo:cod,valor:v}).then(refresh),false)}</span></div>
-      <div class="detail-meta-item"><span class="detail-meta-label">Cantidad</span><span class="detail-meta-value">
-        ${nodo.lineas_medicion&&nodo.lineas_medicion.length>0
-          ? `<span id="dh-cant" class="ecell" contenteditable="false" style="cursor:default;opacity:.7" title="Calculada desde las mediciones">${esc(nodo.medicion_fmt||'0,00')}</span> <span style="font-size:11px;color:var(--text-muted)">🔒</span>`
-          : `${ec(nodo.medicion_fmt||'0,00',true,v=>setCantidadSimple(cod,pc,parseNum(v)),true)}`
-        }
-      </span></div>
-      <div class="detail-meta-item"><span class="detail-meta-label">Precio</span><span class="detail-meta-value">
-        ${nodo.recursos&&nodo.recursos.length>0
-          ? `<span id="dh-precio" class="ecell" contenteditable="false" style="cursor:default;opacity:.7" title="Calculado desde la descomposición">${esc(nodo.precio_fmt)}</span> € <span style="font-size:11px;color:var(--text-muted)">🔒</span>`
-          : `${ec(nodo.precio_fmt,true,v=>api({accion:'precio',codigo:cod,valor:parseNum(v)}).then(refresh),true)} €`
-        }
-      </span></div>
+      <div class="detail-meta-item"><span class="detail-meta-label">Cantidad</span>
+        <span class="detail-meta-value" id="dh-cant">${_renderHeaderCant(nodo,cod,pc)}</span>
+      </div>
+      <div class="detail-meta-item"><span class="detail-meta-label">Precio</span>
+        <span class="detail-meta-value" id="dh-precio">${_renderHeaderPrecio(nodo,cod)}</span>
+      </div>
       <div class="detail-meta-item"><span class="detail-meta-label">Importe</span><span class="detail-meta-value green" id="dh-importe">${esc(nodo.importe_fmt)} €</span></div>
     </div></div>`;
 
@@ -1520,6 +2158,37 @@ function showToast(msg,ms=2200){
   clearTimeout(t._tid);t._tid=setTimeout(()=>{t.style.opacity='0'},ms);
 }
 
+// Construye un TSV (tabulado) de una lista de nodos del árbol, listo para pegar
+// en Excel: Código, Descripción, Ud, Cantidad, Precio, Importe (formato europeo).
+function _construirTSV(nodos){
+  const head=['Código','Descripción','Ud','Cantidad','Precio','Importe'].join('\t');
+  const filas=nodos.map(n=>[
+    n.codigo||'', n.resumen||'', n.unidad||'',
+    n.medicion_fmt||'', n.precio_fmt||'', n.importe_fmt||''
+  ].map(c=>String(c).replace(/\t/g,' ').replace(/\r?\n/g,' ')).join('\t'));
+  return [head,...filas].join('\r\n');
+}
+// Escribe texto en el portapapeles del SISTEMA (para pegar fuera, p.ej. Excel).
+// Funciona en contexto seguro (localhost cuenta como seguro).
+function _copiarSistemaTSV(nodos){
+  if(!nodos||!nodos.length)return;
+  const tsv=_construirTSV(nodos);
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(tsv).catch(()=>_copiarFallback(tsv));
+  }else{
+    _copiarFallback(tsv);
+  }
+}
+// Fallback para navegadores/cont*extos sin Clipboard API.
+function _copiarFallback(texto){
+  try{
+    const ta=document.createElement('textarea');
+    ta.value=texto;ta.style.position='fixed';ta.style.opacity='0';
+    document.body.appendChild(ta);ta.select();
+    document.execCommand('copy');document.body.removeChild(ta);
+  }catch(e){}
+}
+
 // Auto-load file if passed as argument
 window.addEventListener('DOMContentLoaded', ()=>{
   // Restore saved theme
@@ -1534,8 +2203,11 @@ window.addEventListener('DOMContentLoaded', ()=>{
         document.getElementById('loadingOverlay').style.display='none';
         if(data.error){alert(data.error);return}
         fileInfo=data.info;treeData=data.arbol;
+        _discrepancias=data.discrepancias||[];
+        _pemValidacion=data.pem||null;
         if(data.archivo)document.getElementById('fileName').textContent=data.archivo;
-        renderApp()
+        renderApp();
+        actualizarBannerDiscrepancias();
       })
     }
   })
@@ -1544,33 +2216,48 @@ window.addEventListener('DOMContentLoaded', ()=>{
 async function undoAction(){
   const r=await fetch('/api/undo',{method:'POST'});
   const j=await r.json();
-  if(j.error){alert(j.error);return}
+  if(j.error){showToast(j.error);return}
+  refresh(j);
+}
+async function redoAction(){
+  const r=await fetch('/api/redo',{method:'POST'});
+  const j=await r.json();
+  if(j.error){showToast(j.error);return}
   refresh(j);
 }
 document.addEventListener('keydown',e=>{
   // Ignorar siempre si hay una celda en edición activa
   if(document.activeElement&&document.activeElement.contentEditable==='true')return;
 
+  // Ctrl+Shift+Z o Ctrl+Y — rehacer
+  if((e.ctrlKey||e.metaKey)&&((e.key==='z'&&e.shiftKey)||e.key==='y')){
+    e.preventDefault();redoAction();
+    return;
+  }
   // Ctrl+Z — deshacer
   if((e.ctrlKey||e.metaKey)&&e.key==='z'&&!e.shiftKey){
     e.preventDefault();undoAction();
     return;
   }
 
-  // Ctrl+C — copiar selección al portapapeles interno
+  // Ctrl+C — copiar selección: portapapeles interno (pegar en la app) + TSV (pegar en Excel)
   if((e.ctrlKey||e.metaKey)&&e.key==='c'&&!e.shiftKey){
     if(window.getSelection&&window.getSelection().toString())return;
     if(!curNode)return;
     e.preventDefault();
+    let nodos;
     if(selectedNodes.length>1){
       _clipboard=selectedNodes.map(s=>({codigo:s.codigo,padre:s.padre}));
-      showToast(`📋 Copiados ${selectedNodes.length} conceptos`);
+      nodos=selectedNodes.map(s=>_findNodeInParent(treeData,s.codigo,s.padre)).filter(Boolean);
+      showToast(`📋 Copiados ${selectedNodes.length} conceptos (Ctrl+V aquí o pega en Excel)`);
     }else{
       _clipboard={codigo:curNode.codigo,resumen:curNode.resumen};
+      nodos=[curNode];
       document.querySelectorAll('.ttable tr.copied-row').forEach(r=>r.classList.remove('copied-row'));
       document.querySelectorAll('.ttable tbody tr.active').forEach(r=>r.classList.add('copied-row'));
-      showToast(`📋 Copiado: ${curNode.codigo} — ${curNode.resumen||'sin descripción'}`);
+      showToast(`📋 Copiado: ${curNode.codigo} (Ctrl+V aquí o pega en Excel)`);
     }
+    _copiarSistemaTSV(nodos);   // también al portapapeles del sistema, para Excel
     return;
   }
 

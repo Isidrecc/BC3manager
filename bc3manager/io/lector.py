@@ -147,11 +147,58 @@ class LectorBC3:
         self.presupuesto.programa_emisor = get(3)
         self.presupuesto.tipo_datos = get(7)
 
-    # ---- ~K Coeficientes ------------------------------------------------
+    # ---- ~K Coeficientes y redondeos ------------------------------------
 
     def _reg_K(self, campos: list[str]) -> None:
-        # Se lee pero por ahora no se aplican CI/GG/BI en el cálculo (v1).
-        # Reservado para una versión futura que aplique coeficientes.
+        # ~K | DECIMALES\...\MONEDA\ | CI\GG... | ... |
+        #
+        # El campo DECIMALES (índice 1) contiene los decimales de redondeo que
+        # aplica el programa origen (Presto): cantidades, precios de partidas,
+        # subtotales de descomposición, importes, etc. Diálogo de Presto:
+        #   DecCantCap, DecCantMed, DecCantRend, Dec, DecPar, DecNat, DecImp, DecDet, DecFac
+        #
+        # La presencia de ~K indica que el archivo viene de un programa que
+        # redondea a 2 decimales en cada paso (subtotales e importes). Activamos
+        # ese modo para que nuestros precios coincidan con los del archivo.
+        #
+        # Los decimales de precios/subtotales/importes son 2 en prácticamente
+        # todas las configuraciones del sector (y así están en el diálogo de
+        # Presto). El único que suele diferir es el de cantidades/rendimientos
+        # (3), que no re-redondeamos porque ya vienen almacenados en el ~D.
+        self.presupuesto.redondeo_activo = True
+        # Parsear el campo DECIMALES (índice 1). Orden FIEBDC verificado
+        # empíricamente con un archivo de prueba que usa un valor distinto por
+        # parámetro (Test_REDONDEO):
+        #   pos1 DecDet | pos2 DecCantMed | pos3 DecCantRend | pos4 DecImp |
+        #   pos5 DecNat | pos6 DecPar | pos7 Dec
+        # (DecCantCap y DecFac no se emiten en este campo.)
+        campo_dec = campos[1] if len(campos) > 1 else ""
+        partes = campo_dec.split("\\")
+        # partes[0] suele ser '' (antes del primer '\'); los valores numéricos
+        # están en partes[1..7]; el resto (p.ej. 'EUR') se ignora.
+        def _dec(i: int, defecto: int) -> int:
+            try:
+                v = partes[i].strip()
+                return int(v) if v.isdigit() else defecto
+            except (IndexError, ValueError):
+                return defecto
+        p = self.presupuesto
+        p.dec_parcial         = _dec(1, p.dec_parcial)          # DecDet
+        p.dec_cantmed         = _dec(2, p.dec_cantmed)          # DecCantMed
+        p.dec_cantrend        = _dec(3, p.dec_cantrend)         # DecCantRend
+        p.dec_subtotal        = _dec(4, p.dec_subtotal)         # DecImp
+        p.dec_natural         = _dec(5, p.dec_natural)          # DecNat
+        p.dec_precio_partida  = _dec(6, p.dec_precio_partida)   # DecPar
+        p.dec_precio_capitulo = _dec(7, p.dec_precio_capitulo)  # Dec
+        # El importe (precio × medición) usa, por convención de Presto, el mismo
+        # nº de decimales que el precio de capítulo (Dec) para el rollup.
+        p.dec_importe = p.dec_precio_capitulo
+        # Moneda: primer subcampo no numérico del campo DECIMALES (p.ej. 'EUR').
+        for tok in partes:
+            t = tok.strip()
+            if t and not t.isdigit():
+                p.moneda = t
+                break
         return
 
     # ---- ~C Concepto ----------------------------------------------------
@@ -270,6 +317,14 @@ class LectorBC3:
             self.presupuesto.add_concepto(concepto)
 
         medicion = Medicion()
+        # Campo 3: medición total declarada en el archivo (opcional, redundante con
+        # la suma de líneas). Útil para detectar archivos inconsistentes.
+        total_decl = get(3).strip()
+        if total_decl:
+            try:
+                medicion.total_declarado = _to_float(total_decl)
+            except (ValueError, TypeError):
+                pass
         lineas_campo = get(4)
         # Las líneas vienen como subcampos separados por '\', en grupos de 6:
         # TIPO \ COMENTARIO \ N \ LONGITUD \ ANCHURA \ ALTURA

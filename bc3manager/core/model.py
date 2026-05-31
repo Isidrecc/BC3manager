@@ -20,8 +20,18 @@ el recálculo se hará aquí, de forma auditable y reproducible.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
 from typing import Optional
+
+
+def _redondea(x: float, dec: int) -> float:
+    """Redondeo mitad-arriba (ROUND_HALF_UP), como Presto/Excel, a `dec`
+    decimales. Python usa por defecto redondeo bancario (mitad al par), que
+    difiere de Presto en los casos .xx5. Usar str(x) evita arrastrar el error
+    de representación binaria del float."""
+    q = Decimal(1).scaleb(-dec)          # 10^-dec  → p.ej. dec=2 → 0.01
+    return float(Decimal(str(x)).quantize(q, rounding=ROUND_HALF_UP))
 
 
 class TipoConcepto(Enum):
@@ -68,6 +78,12 @@ class LineaMedicion:
 class Medicion:
     """Conjunto de líneas de medición de una partida en un destino (capítulo padre)."""
     lineas: list[LineaMedicion] = field(default_factory=list)
+    # Total declarado en el campo 3 del registro ~M del BC3. Opcional: muchos
+    # archivos lo dejan vacío y el total se obtiene sumando líneas. Cuando
+    # viene relleno y NO coincide con la suma, suele indicar un fichero
+    # generado con datos inconsistentes (manipulación manual, exportador con
+    # bugs, edición en otro programa que no recalculó).
+    total_declarado: float = 0.0
 
     @property
     def total(self) -> float:
@@ -140,6 +156,24 @@ class Presupuesto:
         self.programa_emisor: str = ""
         self.codificacion: str = ""
         self.tipo_datos: str = ""        # "1" presupuesto, "2" BBDD, "3" certificación...
+        # Redondeos (registro ~K). Si el archivo trae ~K, replicamos el modo de
+        # Presto: redondear cada subtotal de la descomposición y el precio de
+        # partida/capítulo a `dec_*` decimales (mitad-arriba). Si NO hay ~K,
+        # `redondeo_activo=False` y se calcula a precisión alta (comportamiento
+        # histórico — no rompe presupuestos sintéticos sin ~K).
+        self.redondeo_activo: bool = False
+        # Decimales del registro ~K (orden FIEBDC verificado empíricamente):
+        #   pos1 DecDet, pos2 DecCantMed, pos3 DecCantRend, pos4 DecImp,
+        #   pos5 DecNat, pos6 DecPar, pos7 Dec
+        self.dec_subtotal: int = 2       # DecImp: subtotales en descomposiciones
+        self.dec_precio_partida: int = 2 # DecPar: precios de partidas
+        self.dec_precio_capitulo: int = 2# Dec:    precios de capítulos
+        self.dec_cantrend: int = 3       # DecCantRend: cantidades/rendimientos (incl. % implícito)
+        self.dec_cantmed: int = 2        # DecCantMed: cantidades de mediciones
+        self.dec_natural: int = 2        # DecNat: precios de conceptos básicos
+        self.dec_importe: int = 2        # importes (precio × medición)
+        self.dec_parcial: int = 2        # DecDet: parciales de líneas de medición
+        self.moneda: str = "EUR"         # divisa declarada en el ~K
 
     # ---- Construcción ----------------------------------------------------
 
@@ -184,12 +218,298 @@ class Presupuesto:
                 else:
                     c.tipo = TipoConcepto.UNITARIO
 
+    # ---- Validación de precios cargados --------------------------------
+
+    def comparar_importes_archivo(self) -> dict:
+        """Devuelve la comparación COMPLETA entre lo grabado en el archivo BC3
+        y lo que sale de la propagación recalculada.
+
+        IMPORTANTE: este método llama a `recalcular()`. Antes de llamar,
+        capturamos los valores del archivo (que están en `_precio_bc3` y en
+        las mediciones leídas).
+
+        Devuelve:
+          {
+            "partidas": [
+              {codigo, padre, resumen, unidad,
+               precio_archivo, precio_calc,
+               medicion, importe_archivo, importe_calc, diferencia, diferencia_pct},
+              ...  # TODAS las partidas, no solo las discrepantes
+            ],
+            "capitulos": [
+              {codigo, padre, resumen,
+               precio_archivo, importe_archivo,    # precio_bc3 del ~C (Presto 8.8)
+               importe_calc,                       # suma de hijos
+               diferencia, diferencia_pct},
+              ...  # TODOS los capítulos
+            ],
+            "pem_archivo": float,         # suma de importe_archivo de capítulos raíz
+            "pem_calculado": float,       # suma de importe_calc de capítulos raíz
+            "diferencia_pem": float,
+          }
+        """
+        # ---- Snapshot ANTES de recalcular ----
+        # Para cada concepto guardamos el precio "del archivo" tal como vino
+        precios_archivo: dict[str, float] = {}
+        for cod, c in self.conceptos.items():
+            pbc3 = getattr(c, "_precio_bc3", None)
+            precios_archivo[cod] = pbc3 if pbc3 is not None else c.precio
+
+        # Recalcular para tener los precios propagados
+        self.recalcular()
+
+        partidas: list[dict] = []
+        capitulos: list[dict] = []
+
+        # Recorrer el árbol enumerando cada (concepto, padre)
+        def recorrer(codigo: str, codigo_padre: str) -> None:
+            c = self.conceptos.get(codigo)
+            if c is None:
+                return
+            if c.tipo == TipoConcepto.CAPITULO:
+                p_archivo = precios_archivo.get(codigo, 0) or 0
+                imp_archivo = round(p_archivo, 2)
+                imp_calc = self._importe_recursivo(codigo, codigo_padre)
+                diff = imp_calc - imp_archivo
+                denom = max(abs(imp_archivo), abs(imp_calc))
+                pct = (abs(diff) / denom * 100) if denom > 0 else 0
+                # Solo añadimos si el capítulo tiene precio_bc3 (sino la comparación no tiene sentido)
+                if p_archivo > 0 or imp_calc > 0:
+                    capitulos.append({
+                        "codigo": codigo,
+                        "padre": codigo_padre,
+                        "resumen": c.resumen,
+                        "precio_archivo": round(p_archivo, 4),
+                        "importe_archivo": imp_archivo,
+                        "importe_calc": round(imp_calc, 2),
+                        "diferencia": round(diff, 2),
+                        "diferencia_pct": round(pct, 2),
+                    })
+                # Recursión hacia hijos
+                for h in c.hijos:
+                    recorrer(h.codigo_hijo, codigo)
+            elif c.tipo == TipoConcepto.PARTIDA:
+                medicion = self.medicion_total(codigo, codigo_padre)
+                p_archivo = precios_archivo.get(codigo, 0) or 0
+                p_calc = c.precio
+                imp_archivo = round(p_archivo * medicion, 2)
+                imp_calc = round(p_calc * medicion, 2)
+                diff = imp_calc - imp_archivo
+                denom = max(abs(imp_archivo), abs(imp_calc))
+                pct = (abs(diff) / denom * 100) if denom > 0 else 0
+                partidas.append({
+                    "codigo": codigo,
+                    "padre": codigo_padre,
+                    "resumen": c.resumen,
+                    "unidad": c.unidad,
+                    "precio_archivo": round(p_archivo, 4),
+                    "precio_calc": round(p_calc, 4),
+                    "medicion": round(medicion, 4),
+                    "importe_archivo": imp_archivo,
+                    "importe_calc": imp_calc,
+                    "diferencia": round(diff, 2),
+                    "diferencia_pct": round(pct, 2),
+                })
+
+        if self.codigo_raiz:
+            raiz = self.conceptos.get(self.codigo_raiz)
+            if raiz:
+                for h in raiz.hijos:
+                    recorrer(h.codigo_hijo, self.codigo_raiz)
+
+        # PEM "archivo" = suma de importes archivo de capítulos raíz que tengan precio_bc3>0
+        # PEM "calculado" = suma de importes calc de capítulos raíz
+        raiz_cods = [h.codigo_hijo for h in raiz.hijos] if self.codigo_raiz and raiz else []
+        pem_archivo = sum(
+            (precios_archivo.get(c, 0) or 0) for c in raiz_cods
+        )
+        pem_calculado = self.presupuesto_total()
+
+        return {
+            "partidas": partidas,
+            "capitulos": capitulos,
+            "pem_archivo": round(pem_archivo, 2),
+            "pem_calculado": round(pem_calculado, 2),
+            "diferencia_pem": round(pem_calculado - pem_archivo, 2),
+        }
+
+    def validar_precios_cargados(
+        self, tolerancia_abs: float = 0.01, tolerancia_rel: float = 0.005
+    ) -> list[dict]:
+        """Atajo para mantener compatibilidad. Devuelve solo las discrepancias
+        de precios (sin mediciones ni PEM). Usa `validar_completo` para todo."""
+        return self.validar_completo(tolerancia_abs, tolerancia_rel)["precios"]
+
+    def validar_completo(
+        self, tolerancia_abs: float = 0.01, tolerancia_rel: float = 0.005
+    ) -> dict:
+        """Validación exhaustiva: compara los datos del archivo con la
+        propagación completa de cantidades, precios e importes.
+
+        Flujo de propagación que se verifica:
+          1. Líneas de medición → medición total de la partida
+          2. Precios hoja × rendimientos (~D) → precio de partida (descomp.)
+          3. Precio × medición → importe de partida
+          4. Suma de importes de partidas → importe de capítulo
+          5. Suma de importes de capítulos raíz → PEM
+
+        En cada paso se compara contra el valor declarado en el archivo (si lo
+        hubiera) y se reporta cualquier diferencia significativa.
+
+        Devuelve un dict con tres listas y un resumen:
+          {
+            "mediciones": [...],    # ~M total declarado != suma líneas
+            "precios": [...],       # ~C precio != precio recalculado (partidas y capítulos)
+            "pem": {...} or None,   # PEM archivo vs PEM calculado
+            "resumen": {...},       # contadores y totales
+          }
+        """
+        def es_diferente(archivo: float, calc: float) -> bool:
+            diff = abs(archivo - calc)
+            if diff < tolerancia_abs:
+                return False
+            denom = max(abs(archivo), abs(calc))
+            if denom == 0:
+                return diff > tolerancia_abs
+            return (diff / denom) > tolerancia_rel
+
+        # =====================================================================
+        # FASE 1 — Snapshot de TODO lo que dice el archivo (antes de recalcular)
+        # =====================================================================
+        precios_archivo: dict[str, float] = {}
+        mediciones_declaradas: dict[tuple[str, str], float] = {}
+        mediciones_lineas: dict[tuple[str, str], float] = {}
+        cantidades_d: dict[tuple[str, str], float] = {}
+        for cod, c in self.conceptos.items():
+            pbc3 = getattr(c, "_precio_bc3", None)
+            if pbc3 is not None:
+                precios_archivo[cod] = pbc3
+            for h in c.hijos:
+                cantidades_d[(h.codigo_hijo, cod)] = h.cantidad
+            for padre, m in c.mediciones.items():
+                if padre == "__sin_padre__":
+                    continue
+                mediciones_lineas[(cod, padre)] = round(
+                    sum(ln.subtotal for ln in m.lineas), 6
+                )
+                if m.total_declarado:
+                    mediciones_declaradas[(cod, padre)] = m.total_declarado
+
+        # =====================================================================
+        # FASE 2 — Recalcular propagando desde las hojas hacia arriba
+        # =====================================================================
+        self.recalcular()
+
+        # =====================================================================
+        # FASE 3 — Comparar el archivo con la propagación
+        # =====================================================================
+        disc_mediciones: list[dict] = []
+        disc_precios: list[dict] = []
+        disc_pem: Optional[dict] = None
+
+        # 3.1 — Medición total declarada vs suma de líneas
+        for (cod, padre), declarada in mediciones_declaradas.items():
+            suma = mediciones_lineas.get((cod, padre), 0.0)
+            if es_diferente(declarada, suma):
+                c = self.conceptos.get(cod)
+                disc_mediciones.append({
+                    "codigo": cod,
+                    "padre": padre,
+                    "resumen": c.resumen if c else "",
+                    "declarada": round(declarada, 4),
+                    "suma_lineas": round(suma, 4),
+                    "diferencia": round(suma - declarada, 4),
+                })
+
+        # 3.2 — Precio archivo (~C) vs precio recalculado
+        # Solo para conceptos con descomposición (los conceptos hoja siempre
+        # tienen `precio_es_dato`, no hay nada que recalcular en ellos).
+        for cod, p_archivo in precios_archivo.items():
+            if p_archivo <= 0:
+                continue
+            c = self.conceptos.get(cod)
+            if not c or not c.hijos:
+                continue
+            p_calc = c.precio
+            if es_diferente(p_archivo, p_calc):
+                diff = p_calc - p_archivo
+                denom = max(abs(p_archivo), abs(p_calc))
+                disc_precios.append({
+                    "codigo": cod,
+                    "resumen": c.resumen,
+                    "tipo": c.tipo.value,
+                    "precio_bc3": round(p_archivo, 4),
+                    "precio_calculado": round(p_calc, 4),
+                    "diferencia": round(diff, 4),
+                    "diferencia_pct": round((abs(diff) / denom * 100) if denom else 0, 2),
+                })
+
+        # 3.3 — PEM del archivo vs PEM calculado
+        # PEM "archivo" = suma de precios congelados de los capítulos raíz.
+        # El PEM es la cifra clave del presupuesto: se reporta ante CUALQUIER
+        # diferencia >= 1 céntimo (sin tolerancia relativa), porque incluso
+        # diferencias pequeñas acumuladas indican que el archivo y el cálculo
+        # no cuadran exactamente y el usuario debe saberlo.
+        pem_calc = self.presupuesto_total()
+        if self.codigo_raiz:
+            raiz = self.conceptos.get(self.codigo_raiz)
+            if raiz:
+                precios_raiz = [
+                    precios_archivo.get(h.codigo_hijo, 0) or 0
+                    for h in raiz.hijos
+                ]
+                # Solo comparable si TODOS los capítulos raíz tienen precio_bc3 > 0
+                if precios_raiz and all(p > 0 for p in precios_raiz):
+                    pem_archivo = sum(precios_raiz)
+                    dif_pem = pem_calc - pem_archivo
+                    if abs(dif_pem) >= 0.01:   # tolerancia: 1 céntimo, sin % relativo
+                        disc_pem = {
+                            "pem_archivo": round(pem_archivo, 2),
+                            "pem_calculado": round(pem_calc, 2),
+                            "diferencia": round(dif_pem, 2),
+                        }
+
+        # Ordenar por gravedad (diferencia absoluta) descendente
+        disc_mediciones.sort(key=lambda d: abs(d["diferencia"]), reverse=True)
+        disc_precios.sort(key=lambda d: abs(d["diferencia"]), reverse=True)
+
+        return {
+            "mediciones": disc_mediciones,
+            "precios": disc_precios,
+            "pem": disc_pem,
+            "resumen": {
+                "total_conceptos": len(self.conceptos),
+                "total_mediciones": len(mediciones_lineas),
+                "mediciones_con_total_declarado": len(mediciones_declaradas),
+                "pem_calculado": round(pem_calc, 2),
+            },
+        }
+
     # ---- Recálculo de precios -------------------------------------------
+
+    @staticmethod
+    def es_porcentaje(concepto: "Concepto") -> bool:
+        """True si el concepto es una línea de porcentaje (medios auxiliares,
+        costes indirectos, etc.). En FIEBDC se identifican porque su unidad es
+        '%' o su código empieza por '%'. Su contribución al precio de la partida
+        NO es precio×rendimiento, sino (suma de líneas anteriores) × coeficiente."""
+        if concepto is None:
+            return False
+        if (concepto.unidad or "").strip() == "%":
+            return True
+        if (concepto.codigo or "").startswith("%"):
+            return True
+        return False
 
     def recalcular(self) -> None:
         """
         Recalcula el precio de todos los conceptos con descomposición,
         de abajo hacia arriba. Los conceptos hoja conservan su precio de dato.
+
+        Las líneas de PORCENTAJE (medios auxiliares %MA, costes indirectos…)
+        se aplican sobre el acumulado de las líneas anteriores de la misma
+        descomposición, NO como precio×rendimiento. Por eso la descomposición
+        se procesa EN ORDEN manteniendo una suma corriente.
         """
         memo: dict[str, float] = {}
         en_proceso: set[str] = set()
@@ -200,17 +520,7 @@ class Presupuesto:
             concepto = self.conceptos.get(codigo)
             if concepto is None:
                 return 0.0
-            # Para capítulos (código con #): respetar precio del BC3 si existe.
-            # Para conceptos hoja (MO, MAQ, MAT): recalcular siempre desde hijos
-            # o usar precio dato si no tienen hijos.
-            precio_bc3 = getattr(concepto, '_precio_bc3', None)
-            es_capitulo = '#' in codigo
-            if precio_bc3 is not None and precio_bc3 > 0 and es_capitulo:
-                memo[codigo] = precio_bc3
-                concepto.precio = precio_bc3
-                concepto.precio_es_dato = True
-                return precio_bc3
-            # Concepto hoja sin precio: 0
+            # Concepto hoja sin descomposición: su precio es dato.
             if not concepto.hijos:
                 memo[codigo] = concepto.precio
                 return concepto.precio
@@ -221,9 +531,37 @@ class Presupuesto:
             en_proceso.add(codigo)
             total = 0.0
             for hijo in concepto.hijos:
-                total += precio_de(hijo.codigo_hijo) * hijo.cantidad
+                hc = self.conceptos.get(hijo.codigo_hijo)
+                if hc is not None and self.es_porcentaje(hc):
+                    # Línea de porcentaje (medios auxiliares, etc.). Presto la
+                    # trata como una cantidad implícita sobre el acumulado:
+                    #   cantidad = acumulado × coef / precio_%   (coef = 0.07, precio_% = 7)
+                    # Esa cantidad se redondea a DecCantRend y luego se multiplica
+                    # por el precio del concepto %. Es lo que reproduce el archivo
+                    # al céntimo (p.ej. DEM.01.01 → 0,104 × 7 = 0,728).
+                    precio_pct = hc.precio
+                    if precio_pct:
+                        qty = total * hijo.cantidad / precio_pct
+                        if self.redondeo_activo:
+                            qty = _redondea(qty, self.dec_cantrend)
+                        sub = precio_pct * qty
+                    else:
+                        sub = total * hijo.cantidad
+                else:
+                    sub = precio_de(hijo.codigo_hijo) * hijo.cantidad
+                # DecImp: Presto redondea el subtotal de CADA línea antes de sumar.
+                if self.redondeo_activo:
+                    sub = _redondea(sub, self.dec_subtotal)
+                total += sub
             en_proceso.discard(codigo)
-            total = round(total, 4)
+            # Redondeo del precio del concepto: DecPar (partidas) o Dec (capítulos).
+            if self.redondeo_activo:
+                dec = (self.dec_precio_capitulo
+                       if concepto.tipo == TipoConcepto.CAPITULO
+                       else self.dec_precio_partida)
+                total = _redondea(total, dec)
+            else:
+                total = round(total, 4)
             concepto.precio = total
             concepto.precio_es_dato = False
             memo[codigo] = total
@@ -243,20 +581,18 @@ class Presupuesto:
         return med.total if med else 0.0
 
     def importe_en_padre(self, codigo_hijo: str, codigo_padre: str) -> float:
-        """Importe de una línea hijo dentro de su padre: precio * medición."""
+        """Importe de una línea hijo dentro de su padre: precio * medición.
+
+        Si no hay medición explícita (sin registros ~M), el importe es 0 — sin
+        fallback a la cantidad del ~D. Esto mantiene la coherencia con la
+        cantidad mostrada en la UI: si la cantidad es 0, el importe es 0.
+        """
         concepto = self.conceptos.get(codigo_hijo)
         if concepto is None:
             return 0.0
         med = self.medicion_total(codigo_hijo, codigo_padre)
-        # Si no hay medición explícita, se usa la cantidad de la descomposición
-        if med == 0.0:
-            padre = self.conceptos.get(codigo_padre)
-            if padre:
-                for h in padre.hijos:
-                    if h.codigo_hijo == codigo_hijo:
-                        med = h.cantidad
-                        break
-        return round(concepto.precio * med, 2)
+        imp = concepto.precio * med
+        return _redondea(imp, self.dec_importe) if self.redondeo_activo else round(imp, 2)
 
     def presupuesto_total(self) -> float:
         """Importe total del presupuesto (importe del concepto raíz)."""
@@ -679,14 +1015,14 @@ class Presupuesto:
         if concepto is None:
             return 0.0
         if concepto.tipo == TipoConcepto.CAPITULO and concepto.hijos:
-            # Los capítulos con precio precalculado en BC3 (Presto 8.8) conservan
-            # su precio original — es lo que el fichero dice que vale el capítulo.
-            if concepto.precio_es_dato and concepto.precio > 0:
-                return round(concepto.precio, 2)
+            # Importe de capítulo = SIEMPRE suma de importes de sus hijos.
+            # No se respeta el "precio congelado" del archivo (Presto 8.8) para
+            # garantizar que el PEM sea determinista: editar y revertir un
+            # valor devuelve al PEM exacto del estado inicial.
             total = 0.0
             for hijo in concepto.hijos:
                 total += self._importe_recursivo(hijo.codigo_hijo, codigo)
-            return round(total, 2)
+            return _redondea(total, self.dec_importe) if self.redondeo_activo else round(total, 2)
         # Partida: precio × medición.
         # Si la medición es 0 (o no hay medición), el importe es 0 — sin excepciones.
         return self.importe_en_padre(codigo, codigo_padre)
