@@ -1233,12 +1233,10 @@ function _initTabDescomp(nodo,cod){
   _tabDescomp=new Tabulator(el,{
     data, index:'codigo', layout:'fitColumns',
     movableRows:true, selectableRows:true, reactiveData:false,
+    editTriggerEvent:'dblclick',   // editar con doble clic; clic simple = seleccionar fila
     placeholder:'Sin recursos — pulsa Añadir',
     columnDefaults:{headerSort:false,resizable:false},
     columns:[
-      {formatter:'rowSelection',titleFormatter:'rowSelection',hozAlign:'center',
-       headerSort:false,width:34,minWidth:34,
-       cellClick:(e,cell)=>cell.getRow().toggleSelect()},
       {rowHandle:true,formatter:'handle',headerSort:false,width:26,minWidth:26},
       {title:'Código',field:'codigo',editor:'input',width:110,
        formatter:c=>`<span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim)">${esc(c.getValue()||'')}</span>`,
@@ -1299,6 +1297,33 @@ function _initTabDescomp(nodo,cod){
       if(!d._isNew)silentSave({accion:'reordenar_recurso',codigo_partida:cod,codigo_recurso:d.codigo,antes_de});
     },
   });
+  _instalarSeleccionRango(_tabDescomp, el);
+}
+
+// Selección de filas estilo lista: clic = una sola, Shift = rango, Ctrl = alternar.
+// Tabulator de serie solo ALTERNA fila a fila (sin rango), así que tomamos el
+// control con un listener en fase de captura que bloquea su selección nativa.
+function _instalarSeleccionRango(tab, el){
+  let anchor=null;
+  el.addEventListener('click',function(e){
+    const rowEl=e.target.closest('.tabulator-row');
+    if(!rowEl)return;
+    // No interferir con el botón borrar (×) ni con el asa de arrastre
+    if(e.target.closest('button')||e.target.closest('.tabulator-row-handle'))return;
+    e.stopImmediatePropagation();   // impedir la selección nativa de Tabulator
+    const rows=tab.getRows();
+    const idx=rows.findIndex(r=>r.getElement()===rowEl);
+    if(idx<0)return;
+    if(e.shiftKey && anchor!=null && anchor<rows.length){
+      const a=Math.min(idx,anchor), b=Math.max(idx,anchor);
+      tab.deselectRow();
+      for(let i=a;i<=b;i++) rows[i].select();
+    }else if(e.ctrlKey||e.metaKey){
+      rows[idx].toggleSelect(); anchor=idx;
+    }else{
+      tab.deselectRow(); rows[idx].select(); anchor=idx;
+    }
+  },true);
 }
 
 // ---- Tabulator — Mediciones ----
@@ -1367,14 +1392,12 @@ function _initTabMedic(nodo,cod,pc){
   _tabMedic=new Tabulator(el,{
     data,index:'_idx',layout:'fitColumns',
     movableRows:true,selectableRows:true,reactiveData:false,
+    editTriggerEvent:'dblclick',   // editar con doble clic; clic simple = seleccionar fila
     clipboard:'paste',clipboardCopyHeader:false,
     clipboardPasteAction:'insert',clipboardPasteParser:_parseMedClipboard,
     placeholder:'Sin mediciones — pulsa Añadir',
     columnDefaults:{headerSort:false,resizable:false},
     columns:[
-      {formatter:'rowSelection',titleFormatter:'rowSelection',hozAlign:'center',
-       headerSort:false,width:34,minWidth:34,clipboard:false,
-       cellClick:(e,cell)=>cell.getRow().toggleSelect()},
       {rowHandle:true,formatter:'handle',headerSort:false,width:26,minWidth:26,clipboard:false},
       {title:'Comentario',field:'comentario',editor:'input',
        cellEdited:function(cell){
@@ -1432,6 +1455,7 @@ function _initTabMedic(nodo,cod,pc){
       calcSave(null,lastJ);
     }
   });
+  _instalarSeleccionRango(_tabMedic, el);
 }
 
 // ---- Render app ----
@@ -2035,7 +2059,7 @@ function renderDetail(nodo){
 
   // Descomposición — Tabulator
   h+=`<div class="detail-section"><h3>Descomposición
-      <span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:6px">Casilla izquierda para seleccionar · Shift+clic = rango · Ctrl+C copia · Supr borra</span>
+      <span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:6px">Clic = seleccionar (Shift = rango) · Doble clic = editar · Ctrl+C copia · Supr borra</span>
     </h3>
     <div id="tab-descomp"></div>
     <div class="tab-actions">
@@ -2053,7 +2077,7 @@ function renderDetail(nodo){
   if(pc){
     const medId='med-'+cod.replace(/[^a-zA-Z0-9]/g,'_');
     h+=`<div class="detail-section"><h3>Mediciones
-      <span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:6px">Ctrl+V pega desde Excel</span>
+      <span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:6px">Clic = seleccionar (Shift = rango) · Doble clic = editar · Ctrl+V pega desde Excel · Supr borra</span>
     </h3>
     <div id="tab-medic" data-medid="${esc(medId)}"></div>
     <div class="tab-actions">
