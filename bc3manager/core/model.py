@@ -694,9 +694,10 @@ class Presupuesto:
         )
         nueva._precio_bc3 = precio
         self.add_concepto(nueva)
-        # cantidad=0.0: sin medición explícita, el importe es 0.
+        # rendimiento=0 → cantidad=0: sin medición explícita, el importe es 0.
+        # (cantidad es factor*rendimiento; no es un campo asignable.)
         # El usuario la fija luego editando la celda Cantidad o añadiendo líneas de medición.
-        padre.hijos.append(Hijo(codigo_hijo=codigo, factor=1.0, rendimiento=1.0, cantidad=0.0))
+        padre.hijos.append(Hijo(codigo_hijo=codigo, factor=1.0, rendimiento=0.0))
 
     def add_capitulo(
         self, codigo: str, resumen: str, codigo_padre: str | None = None,
@@ -988,7 +989,7 @@ class Presupuesto:
                 f"'{codigo}' ya existe en '{padre_destino}'. "
                 f"Para moverlo usa arrastrar y soltar."
             )
-        nuevo = Hijo(codigo_hijo=codigo, rendimiento=1.0, cantidad=0.0)
+        nuevo = Hijo(codigo_hijo=codigo, factor=1.0, rendimiento=0.0)  # cantidad=0
         if antes_de is None:
             destino.hijos.append(nuevo)
         else:

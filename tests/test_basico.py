@@ -77,6 +77,56 @@ def test_validar_precios_detecta_discrepancia():
     )
 
 
+def test_rendimiento_cero_se_conserva():
+    """Un rendimiento 0 en el ~D (partida sin medición en ese capítulo) debe
+    conservarse como 0, no convertirse en 1. Si no, al exportar se inflaban
+    mediciones e importes y Presto reinterpretaba la partida."""
+    ruta = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "Test_SONFONT.bc3"
+    )
+    if not os.path.exists(ruta):
+        return
+    p = leer_bc3(ruta)
+    c01 = p.get("01#")
+    ceros = {h.codigo_hijo for h in c01.hijos if h.cantidad == 0}
+    # En el original, estas partidas tienen rendimiento 0 en 01# (no se miden ahí)
+    assert {"MOV.03.03", "HID.01.02", "HID.02.01", "EST.01.01"} <= ceros, (
+        f"Se perdieron los ceros: {ceros}"
+    )
+
+
+def test_add_partida_no_crashea():
+    """add_partida no debe pasar 'cantidad' al constructor de Hijo (es propiedad
+    de solo lectura). La partida nueva nace con cantidad 0."""
+    p = leer_bc3(EJEMPLO)
+    p.add_partida("01#", "NUEVA.X", "m2", "Prueba", 10.0)
+    h = next(h for h in p.get("01#").hijos if h.codigo_hijo == "NUEVA.X")
+    assert h.cantidad == 0.0
+
+
+def test_round_trip_conserva_rendimiento_cero():
+    """Tras exportar y releer, los rendimientos 0 y el PEM deben mantenerse."""
+    import tempfile
+    ruta = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "Test_SONFONT.bc3"
+    )
+    if not os.path.exists(ruta):
+        return
+    p = leer_bc3(ruta)
+    pem = p.presupuesto_total()
+    with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
+        salida = tmp.name
+    try:
+        escribir_bc3(p, salida)
+        rt = leer_bc3(salida)
+        ceros_o = {h.codigo_hijo for h in p.get("01#").hijos if h.cantidad == 0}
+        ceros_r = {h.codigo_hijo for h in rt.get("01#").hijos if h.cantidad == 0}
+        assert ceros_o == ceros_r, f"{ceros_o} != {ceros_r}"
+        assert abs(rt.presupuesto_total() - pem) < 0.01
+    finally:
+        os.unlink(salida)
+
+
 def test_lineas_porcentaje_medios_auxiliares():
     """Las líneas de porcentaje (%MA = medios auxiliares) deben aplicarse sobre
     el acumulado de la descomposición, NO como precio×rendimiento.
@@ -197,6 +247,41 @@ def test_round_trip():
         assert len(p2.conceptos) == len(p.conceptos)
     finally:
         os.unlink(ruta)
+
+
+def test_export_estructura_presto():
+    """El BC3 exportado debe imitar la estructura de Presto para que NO
+    reclasifique las partidas al reabrir (bug: partidas de movimiento de tierras
+    convertidas en 'maquinaria'). Verifica dos cosas:
+      1. El ~C de cada partida va seguido INMEDIATAMENTE de su ~D. Si Presto lee
+         un ~C sin descomposición pegada, la toma por recurso hoja (maquinaria).
+      2. Los registros ~M llevan el campo POSICIÓN relleno (p.ej. "1\\2\\")."""
+    ruta = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "Test_SONFONT.bc3"
+    )
+    if not os.path.exists(ruta):
+        return
+    p = leer_bc3(ruta)
+    with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
+        salida = tmp.name
+    try:
+        escribir_bc3(p, salida)
+        with open(salida, "rb") as f:
+            texto = f.read().decode("cp1252", errors="replace")
+    finally:
+        os.unlink(salida)
+
+    lineas = [ln for ln in texto.splitlines() if ln.startswith("~")]
+    # 1) ~C de partida pegado a su ~D
+    idx_c = next(i for i, ln in enumerate(lineas) if ln.startswith("~C|MOV.02.01|"))
+    assert lineas[idx_c + 1].startswith("~D|MOV.02.01|"), (
+        "El ~D de la partida debe ir justo tras su ~C; si no, Presto la "
+        "reclasifica como maquinaria."
+    )
+    # 2) ~M con posición (campo 2 no vacío)
+    m_mov = next(ln for ln in lineas if ln.startswith("~M|01#\\MOV.02.01|"))
+    posicion = m_mov.split("|")[2]
+    assert posicion.strip("\\").strip() != "", f"~M sin posición: {m_mov}"
 
 
 if __name__ == "__main__":

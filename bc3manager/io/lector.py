@@ -221,6 +221,7 @@ class LectorBC3:
         precio_campo = get(4)
         primer_precio = precio_campo.split("\\")[0] if precio_campo else ""
         precio = _to_float(primer_precio)
+        fecha = get(5)         # campo FECHA (se conserva para round-trip fiel)
         tipo_fiebdc = get(6)   # campo extra de Presto y otros programas
 
         concepto = self.presupuesto.get(codigo)
@@ -234,6 +235,8 @@ class LectorBC3:
             concepto.precio_es_dato = True
             # _precio_bc3: precio original leído del archivo, inmune al recálculo
             concepto._precio_bc3 = precio
+        if fecha:
+            concepto._fecha_bc3 = fecha
         if tipo_fiebdc:
             concepto._tipo_fiebdc = tipo_fiebdc
 
@@ -258,8 +261,14 @@ class LectorBC3:
         i = 0
         while i < len(partes):
             codigo_hijo = partes[i].strip() if i < len(partes) else ""
-            factor = _to_float(partes[i + 1]) if i + 1 < len(partes) else 1.0
-            rend = _to_float(partes[i + 2]) if i + 2 < len(partes) else 1.0
+            # Leer los valores CRUDOS: hay que distinguir "vacío" (→ por defecto 1)
+            # de "0" explícito (→ 0). Un rendimiento 0 significa medición/cantidad 0
+            # en ese padre (p.ej. una partida que no se mide en ese capítulo) y debe
+            # conservarse; convertirlo a 1 inflaba mediciones e importes al exportar.
+            factor_raw = partes[i + 1].strip() if i + 1 < len(partes) else ""
+            rend_raw   = partes[i + 2].strip() if i + 2 < len(partes) else ""
+            factor = _to_float(factor_raw) if factor_raw != "" else 1.0
+            rend   = _to_float(rend_raw)   if rend_raw   != "" else 1.0
             if codigo_hijo:
                 # Presto 8.8 omite el # en los codigos de capitulo dentro de ~D.
                 # Resolvemos: si no existe sin # pero existe con #, usamos con #.
@@ -268,8 +277,8 @@ class LectorBC3:
                 padre.hijos.append(
                     Hijo(
                         codigo_hijo=codigo_hijo,
-                        factor=factor if factor else 1.0,
-                        rendimiento=rend if rend else 1.0,
+                        factor=factor,
+                        rendimiento=rend,
                     )
                 )
                 if self.presupuesto.get(codigo_hijo) is None:
@@ -369,6 +378,7 @@ class LectorBC3:
         representaciones: si existe codigo+'#' como concepto, reemplaza el hijo
         sin # por la versión con #, y fusiona los datos si procede.
         """
+        aliased: set[str] = set()   # códigos sin # que se redirigieron a su gemelo con #
         for concepto in self.presupuesto.conceptos.values():
             for hijo in concepto.hijos:
                 cod = hijo.codigo_hijo
@@ -382,6 +392,25 @@ class LectorBC3:
                             c_hash.resumen = c_sin.resumen
                         # Apuntar el hijo al concepto con #
                         hijo.codigo_hijo = cod_con_hash
+                        aliased.add(cod)
+
+        # Eliminar los conceptos "fantasma" sin #: son artefactos creados al leer
+        # un ~D que referenciaba el código sin # antes de existir su gemelo con #.
+        # Solo se borran si están vacíos (sin descomposición, sin precio, sin
+        # mediciones) y ya nadie los referencia — así no se exportan ~C basura.
+        for cod in aliased:
+            c = self.presupuesto.get(cod)
+            if c is None:
+                continue
+            vacio = (not c.hijos and not c.mediciones
+                     and not getattr(c, "_precio_bc3", None) and not c.resumen)
+            referenciado = any(
+                h.codigo_hijo == cod
+                for otro in self.presupuesto.conceptos.values()
+                for h in otro.hijos
+            )
+            if vacio and not referenciado:
+                del self.presupuesto.conceptos[cod]
 
     # ---- Detección de la obra raíz --------------------------------------
 
