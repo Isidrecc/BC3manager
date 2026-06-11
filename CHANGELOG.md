@@ -5,6 +5,23 @@ y las reglas que NO hay que romper, ver `CLAUDE.md` (invariantes 5-7).
 
 ---
 
+## 2026-06 — Reorganización de la documentación
+
+- Nueva carpeta `docs/` con la documentación técnica, cada tema en un único
+  sitio: `arquitectura.md`, `api-interna.md`, `formato-bc3.md` y
+  `decisiones.md` (decisiones de diseño con su porqué, antes enterradas aquí).
+- `ARCHITECTURE.md` y `API_INTERNA.md` desaparecen de la raíz: su contenido,
+  **actualizado y corregido**, vive ahora en `docs/`. Estaban desfasados
+  respecto al código (decían que los coeficientes `~K` no se aplicaban, que no
+  había deshacer/rehacer, y les faltaba media API de edición).
+- `Analisis estrategico.md` → `docs/estrategia/analisis-estrategico.md`
+  (es un estudio de negocio, no documentación técnica).
+- README reescrito: refleja la interfaz web, el cálculo con `~K` y enlaza a
+  `docs/`. CLAUDE.md actualizado como contexto permanente (invariante 2
+  corregido: los precios del archivo ya no mandan en el cálculo).
+
+---
+
 ## 2026-06 — Visualización coherente de mediciones e informe de validación
 
 ### Visualización (`web.py`)

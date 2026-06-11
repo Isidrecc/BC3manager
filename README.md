@@ -2,45 +2,54 @@
 
 Visor, editor e informes para archivos **BC3** (formato **FIEBDC-3**), el estándar de intercambio de presupuestos, mediciones y certificaciones de obra en España.
 
-Proyecto de código abierto pensado como herramienta ligera y autocontenida para trabajar con presupuestos sin depender de software propietario de escritorio. Lee un `.bc3`, te deja consultar y editar su estructura, recalcula precios e importes de forma determinista y genera los informes habituales listos para imprimir.
+Herramienta ligera y autocontenida para trabajar con presupuestos sin depender de software propietario de escritorio. Abre un `.bc3` en una interfaz web local, deja consultarlo y editarlo, recalcula precios e importes exactamente igual que el programa de origen (redondeos y costes indirectos incluidos) y genera los informes habituales listos para imprimir.
 
-> Estado: **versión inicial funcional**. Lee y escribe los registros fundamentales del formato (`~V`, `~K`, `~C`, `~D`, `~T`, `~M`) y produce los cuatro informes principales. Ver [Limitaciones](#limitaciones-conocidas) y [Hoja de ruta](#hoja-de-ruta).
+> Estado: **funcional**. Lee y escribe los registros fundamentales del formato (`~V ~K ~C ~D ~T ~M`), replica el cálculo de Presto (verificado contra presupuestos reales) y produce los cuatro informes principales. Ver [Limitaciones](#limitaciones-conocidas).
 
 ## Qué hace
 
-- **Abrir y visualizar** un archivo BC3: capítulos, partidas, textos, mediciones y precios, en árbol jerárquico.
-- **Editar** la estructura mediante el modelo de datos (precios unitarios, mediciones, descomposiciones) y **exportar** de vuelta a un BC3 válido reabrible en Presto, Arquímedes, Menfis, etc.
-- **Recalcular** precios desde la descomposición e importes desde la medición, de forma determinista (los totales nunca se "estiman").
-- **Imprimir informes** en HTML (listos para PDF desde el navegador):
-  1. Mediciones
-  2. Cuadro de precios
-  3. Presupuesto
-  4. Resumen de presupuesto
+- **Abrir y visualizar** un BC3 en el navegador: capítulos, partidas, textos, mediciones y precios, en árbol jerárquico editable.
+- **Editar** con autoguardado al archivo original y deshacer/rehacer: precios, mediciones, descomposiciones, mover/copiar conceptos, añadir capítulos y partidas…
+- **Recalcular de forma determinista**, aplicando los coeficientes y redondeos que declara el propio archivo en su registro `~K` (costes indirectos por partida, redondeo decimal mitad-arriba como Presto).
+- **Validar al abrir**: genera un informe (Excel + `.txt`) que compara los importes del archivo con los calculados y avisa de inconsistencias.
+- **Exportar** de vuelta a un BC3 válido reabrible en Presto, Arquímedes, Menfis, etc.
+- **Imprimir informes** HTML (listos para PDF desde el navegador): mediciones, cuadro de precios, presupuesto y resumen.
 
 ## Instalación
 
-Requiere Python 3.10 o superior. No tiene dependencias externas obligatorias para el núcleo.
+Requiere Python 3.10 o superior y Flask (única dependencia obligatoria).
 
 ```bash
-git clone https://github.com/TU_USUARIO/bc3manager.git
-cd bc3manager
-python -m bc3manager.cli info ejemplo_son_font.bc3
+git clone https://github.com/Isidrecc/BC3manager.git
+cd BC3manager
+pip install flask
 ```
+
+Opcionales: `openpyxl` (Excel de validación) y `weasyprint` (informes a PDF automáticos).
+
+## Uso (interfaz web)
+
+```bash
+python3 -m bc3manager.web                    # abre http://127.0.0.1:5000 en el navegador
+python3 -m bc3manager.web presupuesto.bc3    # con archivo precargado + autoguardado
+```
+
+Con archivo precargado, cada edición se guarda automáticamente al `.bc3` original.
 
 ## Uso (línea de comandos)
 
 ```bash
 # Resumen del archivo (versión, nº de conceptos, PEM total)
-python -m bc3manager.cli info presupuesto.bc3
+python3 -m bc3manager.cli info presupuesto.bc3
 
 # Árbol del presupuesto en consola
-python -m bc3manager.cli arbol presupuesto.bc3
+python3 -m bc3manager.cli arbol presupuesto.bc3
 
 # Generar un informe HTML (mediciones | cuadro | presupuesto | resumen)
-python -m bc3manager.cli informe presupuesto.bc3 --tipo presupuesto --salida pres.html --abrir
+python3 -m bc3manager.cli informe presupuesto.bc3 --tipo presupuesto --salida pres.html --abrir
 
 # Reescribir a un nuevo BC3 (comprueba el ciclo leer/escribir)
-python -m bc3manager.cli exportar presupuesto.bc3 --salida copia.bc3
+python3 -m bc3manager.cli exportar presupuesto.bc3 --salida copia.bc3
 ```
 
 ## Uso (como librería)
@@ -55,7 +64,7 @@ print(p.presupuesto_total())
 
 # Editar: subir un 8% el precio de un material y recalcular todo
 mat = p.get("MT002")
-mat.precio *= 1.08
+p.modificar_precio("MT002", mat.precio * 1.08)
 p.recalcular()
 
 # Generar informe y exportar
@@ -63,39 +72,33 @@ open("resumen.html", "w", encoding="utf-8").write(generar_informe(p, "resumen"))
 escribir_bc3(p, "presupuesto_revisado.bc3")
 ```
 
-## Arquitectura
+## Documentación
 
-```
-bc3manager/
-├── core/
-│   └── model.py        # Modelo de datos: Concepto, Hijo, Medicion, Presupuesto + recálculo
-├── io/
-│   ├── lector.py       # Parser de los registros FIEBDC-3
-│   └── escritor.py     # Exportación a BC3
-├── reports/
-│   └── informes.py     # Generadores de los 4 informes (HTML)
-└── cli.py              # Interfaz de línea de comandos
-```
+| Documento | Contenido |
+|-----------|-----------|
+| [docs/arquitectura.md](docs/arquitectura.md) | Qué hace cada módulo y el recorrido de un BC3 por el programa |
+| [docs/api-interna.md](docs/api-interna.md) | Modelo de datos, operaciones y endpoints HTTP |
+| [docs/formato-bc3.md](docs/formato-bc3.md) | El formato FIEBDC-3 y las rarezas de Presto 8.8 / Presto 20 |
+| [docs/decisiones.md](docs/decisiones.md) | Decisiones de diseño y su porqué |
+| [CHANGELOG.md](CHANGELOG.md) | Historial de cambios |
 
-El diseño separa deliberadamente **datos** (el modelo) de **cálculo** (recálculo determinista) y de **operaciones**. Esto deja el terreno preparado para una eventual capa de IA que **invoque operaciones** sobre el modelo sin calcular nunca los totales por sí misma (ver hoja de ruta).
+La especificación oficial del formato (2016/2020/2024) está en la carpeta `FIEBDC/` del repositorio y en [fiebdc.es](https://www.fiebdc.es). Una referencia práctica de lectura registro a registro es el proyecto [pyArq-Presupuestos](https://pyarq.obraencurso.es/fiebdc).
 
 ## Limitaciones conocidas
 
-Esta primera versión cubre el núcleo del formato, pero el FIEBDC-3 es amplio y tiene muchos casos. Aún **no** se contemplan:
+El FIEBDC-3 es amplio; aún **no** se contemplan:
 
-- Aplicación de coeficientes del registro `~K` (costes indirectos, GG, BI, redondeos por divisa). Se leen pero no se aplican al cálculo.
+- GG, BI e IVA del registro `~K` (se leen y se conservan, pero el cálculo del PEM solo aplica los costes indirectos). PEC y totales con IVA quedan para el futuro.
 - Conceptos paramétricos, precios alternativos múltiples, divisas distintas del euro.
-- Registros de información complementaria, comercial, documental, ambiental (`~O`, `~L`, `~G`, `~E`, `~X`, etc.).
+- Registros de información complementaria, comercial, documental, ambiental (`~O ~L ~G ~E ~X`, etc.).
 - Certificaciones (tipo de datos «3») como flujo diferenciado del presupuesto.
-- Las heurísticas de clasificación capítulo/partida/unitario son pragmáticas y pueden necesitar ajuste con archivos reales variados.
-
-El formato es un estándar abierto y gratuito; la especificación oficial está en [fiebdc.es](https://www.fiebdc.es). Una referencia práctica de lectura registro a registro muy útil es el proyecto [pyArq-Presupuestos](https://pyarq.obraencurso.es/fiebdc).
 
 ## Hoja de ruta
 
-- [ ] Aplicar coeficientes `~K` (CI, GG, BI) y redondeos correctos.
+- [x] Interfaz web editable con autoguardado, deshacer/rehacer e informes de validación.
+- [x] Coeficientes del `~K`: costes indirectos por partida y redondeos exactos como Presto.
+- [ ] PEC y totales con IVA (aplicar GG/BI/IVA).
 - [ ] Soporte de certificaciones.
-- [ ] Interfaz gráfica (árbol editable en escritorio o web).
 - [ ] Exportación de informes a PDF y Excel.
 - [ ] **Capa de IA**: edición conversacional del presupuesto mediante herramientas deterministas (la IA decide *qué* operación ejecutar; el motor la ejecuta y recalcula). Las claves de API irán siempre en variables de entorno, nunca en el código.
 
