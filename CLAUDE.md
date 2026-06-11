@@ -61,7 +61,7 @@ El servidor abre el navegador solo, en `127.0.0.1` (no `localhost`, que en algun
 
 - **Commits: Conventional Commits**, pequeños y atómicos (un cambio lógico por commit): `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`. Mensaje en imperativo y específico (`fix: alias # en ~M de Presto 20`, no `cambios`).
 - **Claude NUNCA commitea.** El usuario commitea con GitHub Desktop. Claude deja los cambios en el working tree y sugiere el mensaje de commit.
-- **Sesiones separadas:** documentar y cambiar código se hace en sesiones distintas. En una sesión de documentación, `bc3manager/`, `scripts/` y `tests/` son SOLO LECTURA (solo se escriben los `.md` de la raíz y `docs/`). En una sesión de código no se reescribe documentación de fondo (solo el CHANGELOG si procede).
+- **Sesiones separadas:** documentar y cambiar código se hace en sesiones distintas. En una sesión de documentación, `bc3manager/`, `scripts/` y `tests/` son SOLO LECTURA (solo se escriben los `.md` de la raíz y `docs/`). En una sesión de código no se reescribe documentación de fondo (solo el CHANGELOG si procede). Plantillas de prompt para ambos tipos de sesión: `docs/guia-sesiones.md`.
 - El usuario no revisa código: verifica a prueba y error. Explica los cambios en lenguaje claro y comprueba tú mismo con los tests antes de dar algo por hecho.
 
 ## Style notes

@@ -80,6 +80,7 @@ escribir_bc3(p, "presupuesto_revisado.bc3")
 | [docs/api-interna.md](docs/api-interna.md) | Modelo de datos, operaciones y endpoints HTTP |
 | [docs/formato-bc3.md](docs/formato-bc3.md) | El formato FIEBDC-3 y las rarezas de Presto 8.8 / Presto 20 |
 | [docs/decisiones.md](docs/decisiones.md) | Decisiones de diseño y su porqué |
+| [docs/guia-sesiones.md](docs/guia-sesiones.md) | Plantillas de prompt para trabajar con IA (documentar / cambiar código) |
 | [CHANGELOG.md](CHANGELOG.md) | Historial de cambios |
 
 La especificación oficial del formato (2016/2020/2024) está en la carpeta `FIEBDC/` del repositorio y en [fiebdc.es](https://www.fiebdc.es). Una referencia práctica de lectura registro a registro es el proyecto [pyArq-Presupuestos](https://pyarq.obraencurso.es/fiebdc).

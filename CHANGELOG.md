@@ -19,6 +19,9 @@ y las reglas que NO hay que romper, ver `CLAUDE.md` (invariantes 5-7).
 - README reescrito: refleja la interfaz web, el cálculo con `~K` y enlaza a
   `docs/`. CLAUDE.md actualizado como contexto permanente (invariante 2
   corregido: los precios del archivo ya no mandan en el cálculo).
+- Nueva `docs/guia-sesiones.md`: plantillas de prompt para sesiones de
+  documentación (mantenimiento) y de código, con las reglas comunes
+  (Conventional Commits, la IA no commitea, verificar contra el código).
 
 ---
 
