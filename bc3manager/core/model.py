@@ -49,6 +49,21 @@ def _mult_red(a: float, b: float, dec: int) -> float:
     return float(prod.quantize(q, rounding=ROUND_HALF_UP))
 
 
+def _num_decimales(x: float) -> int:
+    """Nº de decimales significativos de un valor, contados sobre su repr más
+    corto (str), no sobre el float crudo. Devuelve -1 si parece ruido binario
+    (más de 8 decimales), para no dar falsos avisos. Ej.: 0.315→3, -3.1415→4,
+    29.0→0, 0.30→1."""
+    s = str(abs(x))
+    if "e" in s or "E" in s:        # notación científica → ruido
+        return -1
+    if "." not in s:
+        return 0
+    dec = s.split(".")[1].rstrip("0")
+    n = len(dec)
+    return -1 if n > 8 else n
+
+
 class TipoConcepto(Enum):
     """Tipo de concepto según su papel en el árbol."""
     CAPITULO = "capitulo"          # Agrupador (incluye obra raíz y subcapítulos)
@@ -243,18 +258,37 @@ class Presupuesto:
             elif tf in PARTIDAS_FIEBDC:
                 c.tipo = TipoConcepto.PARTIDA
             else:
+                # ¿Sus hijos están MEDIDOS dentro de este concepto? Es decir, su
+                # ~M apunta a mi código (son partidas que cuelgan de mí) o son
+                # subcapítulos. Si es así, este concepto AGREGA importes y es un
+                # capítulo. Si sus hijos son recursos (mano de obra, material…) o
+                # auxiliares NO medidos en mí, no agrega: con medición es partida.
+                # OJO: no vale "el hijo tiene hijos" (un recurso auxiliar puede
+                # tener descomposición propia sin ser una partida de este padre).
+                agrega = any(
+                    (hc := self.conceptos.get(h.codigo_hijo)) is not None
+                    and (c.codigo in hc.mediciones or hc.es_raiz_obra)
+                    for h in c.hijos
+                )
                 # Heurística: raíz o código con # sin unidad → capítulo
                 if c.es_raiz_obra or (c.codigo.endswith("#") and not c.unidad):
                     c.tipo = TipoConcepto.CAPITULO
+                elif c.hijos and agrega:
+                    # Hijos son partidas/subcapítulos → es un capítulo, AUNQUE
+                    # traiga una medición "fantasma" (Prestos antiguos ponían a
+                    # veces medición=1 en los capítulos). No lo confundas con
+                    # partida por tener ~M.
+                    c.tipo = TipoConcepto.CAPITULO
+                elif c.mediciones:
+                    # Tiene medición propia y NO agrega partidas: es una PARTIDA
+                    # medida, aunque tenga descomposición de recursos y le falte
+                    # la unidad en el ~C (caso 'Cartell de 120x120 d'alumini', y
+                    # las partidas alzadas hoja con unidad "PA"). Los capítulos
+                    # de verdad ya se han filtrado arriba por 'agrega'.
+                    c.tipo = TipoConcepto.PARTIDA
                 elif c.hijos:
                     # Con descomposición y unidad → partida; sin unidad → capítulo
                     c.tipo = TipoConcepto.PARTIDA if c.unidad else TipoConcepto.CAPITULO
-                elif c.mediciones:
-                    # Hoja con medición (~M) colgando de un capítulo: es una
-                    # partida (típicamente una partida alzada, unidad "PA"). Los
-                    # recursos básicos nunca llevan mediciones, así que esto los
-                    # distingue de forma fiable.
-                    c.tipo = TipoConcepto.PARTIDA
                 else:
                     c.tipo = TipoConcepto.UNITARIO
 
@@ -393,6 +427,54 @@ class Presupuesto:
             "pem_calculado": round(pem_calculado, 2),
             "diferencia_pem": round(pem_calculado - pem_archivo, 2),
         }
+
+    def revisar_consistencia_k(self, max_ejemplos: int = 5) -> dict:
+        """Revisa si los valores del archivo respetan los decimales que declara
+        su registro ~K (que para campos en positivo son EXACTOS). Un valor con
+        MÁS decimales de los declarados es un aviso de no conformidad: el
+        cálculo lo redondea igual (replica a Presto/FIEBDC), pero conviene saber
+        que el archivo trae datos fuera de su propio ~K.
+
+        Devuelve un dict por categoría:
+          { categoria: {declarado, total, ejemplos:[{codigo,padre,campo,valor}]} }
+        Solo se evalúa si hay ~K (redondeo_activo); si no, devuelve {}.
+        """
+        if not self.redondeo_activo:
+            return {}
+
+        cats: dict[str, dict] = {}
+
+        def avisa(cat: str, declarado: int, codigo: str, padre: str,
+                  campo: str, valor: float) -> None:
+            nd = _num_decimales(valor)
+            if nd < 0 or nd <= declarado:
+                return
+            d = cats.setdefault(cat, {"declarado": declarado, "total": 0, "ejemplos": []})
+            d["total"] += 1
+            if len(d["ejemplos"]) < max_ejemplos:
+                d["ejemplos"].append({
+                    "codigo": codigo, "padre": padre, "campo": campo,
+                    "valor": valor, "decimales": nd,
+                })
+
+        for cod, c in self.conceptos.items():
+            # Rendimientos del ~D (DR/DRS)
+            for h in c.hijos:
+                avisa("rendimientos", self.dec_cantrend, cod, "", "rendimiento",
+                      h.rendimiento)
+            # Precio de conceptos hoja (básicos): DES/DUO ~ dec_natural
+            if not c.hijos and c.precio:
+                avisa("precios_basicos", self.dec_natural, cod, "", "precio", c.precio)
+            # Líneas de medición: uds (DN) y dimensiones (DD)
+            for padre, m in c.mediciones.items():
+                if padre == "__sin_padre__":
+                    continue
+                for ln in m.lineas:
+                    avisa("uds_medicion", self.dec_num, cod, padre, "uds", ln.n_uds)
+                    avisa("dimensiones", self.dec_dim, cod, padre, "longitud", ln.longitud)
+                    avisa("dimensiones", self.dec_dim, cod, padre, "anchura", ln.anchura)
+                    avisa("dimensiones", self.dec_dim, cod, padre, "altura", ln.altura)
+        return cats
 
     def validar_precios_cargados(
         self, tolerancia_abs: float = 0.01, tolerancia_rel: float = 0.005

@@ -416,6 +416,30 @@ def test_alqueria_sin_discrepancias_y_pem():
     assert abs(pem - arch) / arch < 0.0005, f"PEM {pem:,.2f} vs archivo {arch:,.2f}"
 
 
+def test_alqueria_partida_con_descomposicion_sin_unidad():
+    """Una partida con descomposición pero sin unidad en el ~C debe clasificarse
+    como PARTIDA (no capítulo) porque tiene medición propia. 701.0236a
+    ('Cartell de 120x120 d'alumini'). Si sale capítulo, su importe se pierde."""
+    if not os.path.exists(ALQUERIA):
+        return
+    from bc3manager.core.model import TipoConcepto
+    p = leer_bc3(ALQUERIA)
+    assert p.get("701.0236a").tipo == TipoConcepto.PARTIDA
+
+
+def test_alqueria_consistencia_k_detecta_decimales():
+    """El chequeo de consistencia debe avisar de los valores del archivo con más
+    decimales de los que declara el ~K: dimensiones (DD=2) como 0,315 y uds
+    (DN=2) como -3,1415. Es informativo, no cambia el cálculo."""
+    if not os.path.exists(ALQUERIA):
+        return
+    p = leer_bc3(ALQUERIA)
+    cats = p.revisar_consistencia_k()
+    assert "dimensiones" in cats and cats["dimensiones"]["declarado"] == 2
+    assert "uds_medicion" in cats and cats["uds_medicion"]["declarado"] == 2
+    assert cats["dimensiones"]["total"] > 0 and cats["uds_medicion"]["total"] > 0
+
+
 def test_presto88_sin_ci_sigue_exacto():
     """Un archivo sin CI en el ~K (Presto 8.8) NO debe aplicar ningún recargo:
     ci_pct=0 y el PEM cuadra exacto. Protege contra aplicar CI donde no toca."""

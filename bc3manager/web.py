@@ -8,7 +8,7 @@ import os, sys, tempfile, webbrowser, json as _json
 from threading import Timer
 from typing import Optional
 from flask import Flask, render_template_string, request, jsonify, send_file, Response
-from bc3manager.core.model import Presupuesto, TipoConcepto, Hijo, Concepto, _mult_red
+from bc3manager.core.model import Presupuesto, TipoConcepto, Hijo, Concepto, _mult_red, _redondea
 from bc3manager.io.lector import leer_bc3
 from bc3manager.io.escritor import escribir_bc3
 from bc3manager.reports.informes import generar_informe, INFORMES
@@ -62,11 +62,18 @@ def _arbol_json(p: Presupuesto) -> list[dict]:
         lineas_med = []
         med_obj = c.mediciones.get(codigo_padre)
         if med_obj:
+            # Mostramos los valores REDONDEADOS a sus decimales del ~K (uds→DN,
+            # dimensiones→DD), que son los que de verdad se usan en el cálculo.
+            # Así la línea es coherente: lo que se ve multiplicado = el parcial.
+            ddec, ndec = (p.dec_dim, p.dec_num) if p.redondeo_activo else (3, 3)
             for ln in med_obj.lineas:
-                # Parcial con el redondeo de Presto (dimensiones a DD, etc.).
                 parcial = p.parcial_linea(ln)
-                lineas_med.append({"comentario": ln.comentario, "n_uds": ln.n_uds,
-                    "longitud": ln.longitud, "anchura": ln.anchura, "altura": ln.altura,
+                n = _redondea(ln.n_uds, ndec) if p.redondeo_activo else ln.n_uds
+                lo = _redondea(ln.longitud, ddec) if p.redondeo_activo else ln.longitud
+                an = _redondea(ln.anchura, ddec) if p.redondeo_activo else ln.anchura
+                al = _redondea(ln.altura, ddec) if p.redondeo_activo else ln.altura
+                lineas_med.append({"comentario": ln.comentario,
+                    "n_uds": n, "longitud": lo, "anchura": an, "altura": al,
                     "subtotal": round(parcial, 3), "subtotal_fmt": _fmt(parcial, 2)})
         # Precio mostrado: para partidas, el precio CON costes indirectos (como
         # Presto, p.ej. 9,39 = 8,86 + 6%). Para capítulos/recursos, su precio.
@@ -180,7 +187,12 @@ def _payload_carga(p) -> dict:
     _estado["ruta_validacion_xlsx"] = ruta_xlsx
     if ruta_xlsx:
         _safe_print(f"[OK] Excel de validacion generado en: {ruta_xlsx}")
-        _safe_print()
+    # Informe .txt automático (mismo contenido que el volcado de terminal)
+    ruta_txt = _generar_validacion_txt_seguro(p)
+    _estado["ruta_validacion_txt"] = ruta_txt
+    if ruta_txt:
+        _safe_print(f"[OK] Informe .txt de validacion generado en: {ruta_txt}")
+    _safe_print()
     # PEM siempre presente (números reales aunque coincidan)
     comp = p.comparar_importes_archivo()
     pem = {
@@ -211,95 +223,111 @@ def _safe_print(*args, **kwargs) -> None:
         print(line, **kwargs)
 
 
-def _log_discrepancias(p, nombre_archivo: str) -> None:
-    """Vuelca a consola TODAS las discrepancias entre el archivo BC3 y la
-    propagación recalculada (mediciones, precios, PEM).
-    Se ejecuta UNA vez al abrir el presupuesto."""
+def _construir_informe(p, nombre_archivo: str) -> str:
+    """Genera el informe de validación COMPLETO como texto. Fuente única para
+    el volcado por terminal y para el archivo .txt (así nunca divergen).
+
+    Dos bloques:
+      (A) Coherencia interna: el archivo cuadra consigo mismo (mediciones,
+          precios, PEM).
+      (B) Conformidad con el ~K: valores con más decimales de los declarados.
+    """
     val = p.validar_completo()
+    cats = p.revisar_consistencia_k()
+    resumen = val["resumen"]
     sep = "=" * 78
     subsep = "-" * 78
-    resumen = val["resumen"]
+    L: list[str] = []
+    add = L.append
 
-    _safe_print()
-    _safe_print(sep)
-    _safe_print(f"  VALIDACION COMPLETA - {nombre_archivo}")
-    _safe_print(f"  Conceptos: {resumen['total_conceptos']}  "
-                f"Mediciones: {resumen['total_mediciones']}  "
-                f"PEM (propagado): {_fmt(resumen['pem_calculado'])} EUR")
-    _safe_print(sep)
+    add(sep)
+    add(f"  VALIDACION - {nombre_archivo}")
+    add(f"  Conceptos: {resumen['total_conceptos']}  "
+        f"Mediciones: {resumen['total_mediciones']}  "
+        f"PEM (propagado): {_fmt(resumen['pem_calculado'])} EUR")
+    if val["pem"]:
+        pem = val["pem"]
+        d = pem["diferencia"]
+        base = pem["pem_archivo"] or 1
+        add(f"  PEM archivo: {_fmt(pem['pem_archivo'])} EUR   "
+            f"diferencia: {_fmt(d)} EUR ({d/base*100:+.4f}%)")
+    add(sep)
 
-    n_med = len(val["mediciones"])
-    n_pre = len(val["precios"])
-    n_pem = 1 if val["pem"] else 0
-    total = n_med + n_pre + n_pem
-
-    if total == 0:
-        _safe_print("  [OK] La propagacion coincide con lo declarado en el archivo:")
-        _safe_print("       - Sumas de lineas de medicion coinciden con totales declarados")
-        _safe_print("       - Precios de partidas/capitulos coinciden con descomposicion")
-        _safe_print("       - PEM agregado coincide con suma de capitulos raiz")
-        _safe_print(sep)
-        _safe_print()
-        return
-
-    # ---- 1) Mediciones ----------------------------------------------------
-    _safe_print()
-    _safe_print(f"  [1] MEDICIONES  ({n_med} inconsistencia(s))")
-    _safe_print(subsep)
+    # ---- (A) 1) Mediciones ----
+    add("")
+    add(f"  [1] MEDICIONES  ({len(val['mediciones'])} inconsistencia(s))")
+    add(subsep)
     if not val["mediciones"]:
-        _safe_print("     OK. Suma de lineas == total declarado en todos los registros ~M.")
+        add("     OK. Suma de lineas == total declarado en todos los ~M.")
     else:
-        _safe_print(f"     {'PARTIDA':<14} {'EN':<14} {'DECLARADA':>14}  "
-                    f"{'SUMA LINEAS':>14}  {'DIF':>10}")
-        _safe_print(f"     {'-'*14} {'-'*14} {'-'*14}  {'-'*14}  {'-'*10}")
+        add(f"     {'PARTIDA':<14} {'EN':<14} {'DECLARADA':>14}  {'SUMA LINEAS':>14}  {'DIF':>10}")
+        add(f"     {'-'*14} {'-'*14} {'-'*14}  {'-'*14}  {'-'*10}")
         for d in val["mediciones"][:30]:
-            _safe_print(
-                f"     {d['codigo']:<14} {d['padre']:<14} "
-                f"{_fmt(d['declarada'], 4):>14}  "
-                f"{_fmt(d['suma_lineas'], 4):>14}  "
-                f"{_fmt(d['diferencia'], 4):>10}"
-            )
+            add(f"     {d['codigo']:<14} {d['padre']:<14} {_fmt(d['declarada'],4):>14}  "
+                f"{_fmt(d['suma_lineas'],4):>14}  {_fmt(d['diferencia'],4):>10}")
         if len(val["mediciones"]) > 30:
-            _safe_print(f"     ... y {len(val['mediciones']) - 30} mas")
+            add(f"     ... y {len(val['mediciones']) - 30} mas")
 
-    # ---- 2) Precios -------------------------------------------------------
-    _safe_print()
-    _safe_print(f"  [2] PRECIOS  ({n_pre} inconsistencia(s))")
-    _safe_print(subsep)
+    # ---- (A) 2) Precios ----
+    add("")
+    add(f"  [2] PRECIOS  ({len(val['precios'])} inconsistencia(s))")
+    add(subsep)
     if not val["precios"]:
-        _safe_print("     OK. Precios del archivo == precios recalculados desde descomposicion.")
+        add("     OK. Precios del archivo == precios recalculados desde descomposicion.")
     else:
-        _safe_print(f"     {'CODIGO':<14} {'TIPO':<5} {'ARCHIVO':>14}  "
-                    f"{'CALCULADO':>14}  {'DIF':>10}  {'%':>7}  DESCRIPCION")
-        _safe_print(f"     {'-'*14} {'-'*5} {'-'*14}  {'-'*14}  {'-'*10}  {'-'*7}  {'-'*30}")
+        add(f"     {'CODIGO':<14} {'TIPO':<5} {'ARCHIVO':>14}  {'CALCULADO':>14}  {'DIF':>10}  {'%':>7}  DESCRIPCION")
+        add(f"     {'-'*14} {'-'*5} {'-'*14}  {'-'*14}  {'-'*10}  {'-'*7}  {'-'*30}")
         for d in val["precios"][:30]:
             tipo = "CAP" if d["tipo"] == "capitulo" else "PAR"
-            _safe_print(
-                f"     {d['codigo']:<14} {tipo:<5} "
-                f"{_fmt(d['precio_bc3'], 4):>14}  "
-                f"{_fmt(d['precio_calculado'], 4):>14}  "
-                f"{_fmt(d['diferencia'], 2):>10}  "
-                f"{d['diferencia_pct']:>6.2f}%  "
-                f"{(d['resumen'] or '')[:40]}"
-            )
+            add(f"     {d['codigo']:<14} {tipo:<5} {_fmt(d['precio_bc3'],4):>14}  "
+                f"{_fmt(d['precio_calculado'],4):>14}  {_fmt(d['diferencia'],2):>10}  "
+                f"{d['diferencia_pct']:>6.2f}%  {(d['resumen'] or '')[:40]}")
         if len(val["precios"]) > 30:
-            _safe_print(f"     ... y {len(val['precios']) - 30} mas")
+            add(f"     ... y {len(val['precios']) - 30} mas")
 
-    # ---- 3) PEM -----------------------------------------------------------
-    _safe_print()
-    _safe_print(f"  [3] PEM TOTAL")
-    _safe_print(subsep)
+    # ---- (A) 3) PEM ----
+    add("")
+    add("  [3] PEM TOTAL")
+    add(subsep)
     if not val["pem"]:
-        _safe_print("     OK (o sin precios congelados en capitulos raiz que comparar).")
+        add("     OK (o sin precios congelados en capitulos raiz que comparar).")
     else:
         pem = val["pem"]
-        _safe_print(f"     PEM declarado en el archivo (suma capitulos raiz): "
-                    f"{_fmt(pem['pem_archivo'])} EUR")
-        _safe_print(f"     PEM propagado desde partidas:                     "
-                    f"{_fmt(pem['pem_calculado'])} EUR")
-        _safe_print(f"     Diferencia: {_fmt(pem['diferencia'])} EUR")
+        add(f"     PEM declarado en el archivo (suma capitulos raiz): {_fmt(pem['pem_archivo'])} EUR")
+        add(f"     PEM propagado desde partidas:                     {_fmt(pem['pem_calculado'])} EUR")
+        add(f"     Diferencia: {_fmt(pem['diferencia'])} EUR")
 
-    _safe_print(sep)
+    # ---- (B) 4) Consistencia con el ~K ----
+    add("")
+    add(f"  [4] CONSISTENCIA CON EL REGISTRO ~K (decimales)")
+    add(subsep)
+    if not p.redondeo_activo:
+        add("     Sin registro ~K: no aplica.")
+    elif not cats:
+        add("     OK. Todos los valores respetan los decimales declarados en el ~K.")
+    else:
+        add("     AVISO: valores con MAS decimales de los que declara el ~K (exactos).")
+        add("     El calculo los redondea igual que Presto; es solo informacion del archivo.")
+        nombres = {"dimensiones": "Dimensiones (largo/ancho/alto)",
+                   "uds_medicion": "Uds de medicion",
+                   "rendimientos": "Rendimientos (~D)",
+                   "precios_basicos": "Precios de conceptos basicos"}
+        for cat, d in cats.items():
+            add(f"     - {nombres.get(cat, cat)} | ~K declara {d['declarado']} dec | {d['total']} caso(s)")
+            for e in d["ejemplos"]:
+                add(f"         {e['codigo']:<14} {(e['padre'] or ''):<10} "
+                    f"{e['campo']}={_fmt(e['valor'],4)} ({e['decimales']} dec)")
+
+    add(sep)
+    return "\n".join(L)
+
+
+def _log_discrepancias(p, nombre_archivo: str) -> None:
+    """Vuelca a consola el informe de validación. Se ejecuta al abrir el
+    presupuesto. Usa el MISMO generador que el .txt (_construir_informe)."""
+    _safe_print()
+    for linea in _construir_informe(p, nombre_archivo).split("\n"):
+        _safe_print(linea)
     _safe_print()
 
 
@@ -665,6 +693,38 @@ def _generar_validacion_xlsx_seguro(p) -> Optional[str]:
         return destino
     except Exception as e:
         _safe_print(f"[AVISO] No se pudo generar el Excel de validacion: {e}")
+        return None
+
+
+def _ruta_validacion_txt() -> str:
+    """Ruta del informe .txt de validación: junto al BC3 (o en temp si vino por
+    upload). Mismo criterio que el Excel."""
+    ruta_bc3 = _estado.get("ruta_original") or ""
+    nombre_bc3 = _estado.get("nombre_archivo") or "presupuesto.bc3"
+    base = os.path.splitext(os.path.basename(nombre_bc3))[0]
+    nombre_txt = f"validacion_{base}.txt"
+    if ruta_bc3:
+        try:
+            es_temporal = os.path.commonpath([ruta_bc3, tempfile.gettempdir()]) == tempfile.gettempdir()
+        except (ValueError, OSError):
+            es_temporal = False
+        if not es_temporal:
+            return os.path.join(os.path.dirname(os.path.abspath(ruta_bc3)), nombre_txt)
+    return os.path.join(tempfile.gettempdir(), nombre_txt)
+
+
+def _generar_validacion_txt_seguro(p) -> Optional[str]:
+    """Escribe el informe .txt (mismo contenido que el volcado de terminal) junto
+    al Excel. Si falla, devuelve None sin reventar la carga."""
+    try:
+        destino = _ruta_validacion_txt()
+        nombre = _estado.get("nombre_archivo") or "presupuesto.bc3"
+        with open(destino, "w", encoding="utf-8") as f:
+            f.write(_construir_informe(p, nombre))
+            f.write("\n")
+        return destino
+    except Exception as e:
+        _safe_print(f"[AVISO] No se pudo generar el .txt de validacion: {e}")
         return None
 
 

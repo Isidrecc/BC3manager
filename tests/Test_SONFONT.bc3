@@ -1,0 +1,180 @@
+~V|SOFT S.A.|FIEBDC-3/2002|Presto 8.8||ANSI|
+~K|\2\2\3\2\2\2\2\EUR\|0|
+~C|%MA.7|%|Medios auxiliares|7|110925|0|
+~C|01#||FASE 0 - COLECTOR CARRETERA|136952.25|221019|0|
+~D|01#|DEM.01.01\1\655.6\MOV.02.01\1\1048.96\MOV.02.02\1\121.5\MOV.03.01\1\721.16\MOV.03.02\1\524.48\MOV.03.03\1\0\HID.01.01\1\819.5\HID.01.02\1\0\HID.02.01\1\0\HID.03.01\1\18\EST.01.01\1\0\|
+~C|02#||FASE 1|197086.73|221019|0|
+~D|02#|02.01\1\1\02.02\1\1\|
+~C|02.01#||COLECTORES AGRICOLAS|71565.96|221019|0|
+~D|02.01#|MOV.02.01\1\443.96\MOV.02.02\1\67.5\MOV.03.01\1\233.2\MOV.03.02\1\127.2\MOV.03.03\1\136.76\HID.01.01\1\265\HID.01.02\1\291\HID.02.01\1\6\HID.03.01\1\10\EST.01.01\1\10\|
+~C|02.02#||CUNETAS CAMINOS|125520.77|221019|0|
+~D|02.02#|MOV.02.01\1\72.96\MOV.03.01\1\50.16\MOV.03.02\1\27.36\MOV.04.01\1\307\HID.01.03\1\57\HID.04.01\1\131.6\HID.04.02\1\3\|
+~C|03#||FASE 2|108265.65|221019|0|
+~D|03#|03.01\1\1\03.02\1\1\|
+~C|03.01#||COLECTORES AGRÍCOLAS|59673.95|221019|0|
+~D|03.01#|MOV.02.01\1\308.68\MOV.02.02\1\20.25\MOV.03.01\1\291.28\MOV.03.02\1\211.84\MOV.03.03\1\134.6\HID.01.01\1\331\HID.01.02\1\285\HID.02.01\1\9\HID.03.01\1\3\EST.01.01\1\10\|
+~C|03.02#||CUNETAS CAMINOS|48591.7|221019|0|
+~D|03.02#|MOV.02.01\1\396.8\MOV.03.01\1\272.8\MOV.03.02\1\198.4\MOV.04.01\1\752\HID.01.01\1\261\HID.01.03\1\62.72\HID.04.02\1\5\|
+~C|04#||FASE 3|160326.25|221019|0|
+~D|04#|04.01\1\1\04.02\1\1\|
+~C|04.01#||COLECTOR AGRÍCOLA|136262.97|221019|0|
+~D|04.01#|MOV.02.01\1\846.92\MOV.03.01\1\404.8\MOV.03.02\1\294.4\MOV.03.03\1\274.12\MOV.02.02\1\121.5\HID.01.01\1\460\HID.01.02\1\717\HID.02.01\1\18\HID.03.01\1\18\EST.01.01\1\20\|
+~C|04.02#||CUNETA CAMINOS|24063.28|221019|0|
+~D|04.02#|MOV.02.01\1\118.44\MOV.03.01\1\93.44\MOV.03.02\1\93.44\MOV.04.01\1\848\HID.01.01\1\93.44\HID.01.03\1\25\HID.04.01\1\4\HID.04.02\1\2\|
+~C|DEM.01.01|m²|Demolición de pavimento continuo de hormigón|11.17|221019|0|
+~D|DEM.01.01|MO.006\1\0.1\MAQ.RET.10\1\0.15\%MA.7\1\0.07\|
+~C|EST.01.01|m|Muro de gaviones de malla electrosoldada|209.25|221019|0|
+~D|EST.01.01|MO_003\1\2\MO_005\1\2.9\MAQ.RET.10\1\0.1\MT.GAV\1\1\%MA.7\1\0.07\|
+~C|HID.01.01|m|Tubo compacto de PVC SN4 DN=315mm|48.97|221019|0|
+~D|HID.01.01|MO_003\1\0.2\MO_005\1\0.2\MAQ_CAM.GRU\1\0.05\MT_PVC.315\1\1.1\MT_LUB\1\0.021\%MA.7\1\0.07\|
+~C|HID.01.02|m|Tubería drenante PEAD perforada DN110|18.11|221019|0|
+~D|HID.01.02|MO_003\1\0.2\MO_005\1\0.2\MAQ_CAM.GRU\1\0.05\MT_PER.110\1\1.1\%MA.7\1\0.07\|
+~C|HID.01.03|m|Tubo compacto de PVC SN4 DN=160mm|47.01|221019|0|
+~D|HID.01.03|MO_003\1\0.2\MO_005\1\0.2\MAQ_CAM.GRU\1\0.05\MT_PVC.160\1\1.1\MT_LUB\1\0.021\%MA.7\1\0.07\|
+~C|HID.02.01|u|Acometida tubería drenante DN110 a colector PVC DN315
+|93.39|221019|0|
+~D|HID.02.01|MO_003\1\0.5\MO_005\1\0.5\MAQ_CAM.GRU\1\0.05\MT_PER.110\1\1.1\MT.PVC.AE\1\1\MT.PVC.IR\1\1\MT_LUB\1\0.021\%MA.7\1\0.07\|
+~C|HID.03.01|u|Pozo de registro prefabricado de PVC corrugado|2353.98|221019|0|
+~D|HID.03.01|MO_003\1\2\MO_005\1\2.9\MAQ_CAM.GRU\1\0.24\MT_PER.110\1\1.1\MT_HA30\1\0.53\MT_HM30\1\0.3\MT_ME.20X20\1\1.8\MT_POZ.1\1\1\MT_JUNT.1000\1\1\MT_LUB\1\0.021\MT_TAPA\1\1\%MA.7\1\0.07\|
+~C|HID.04.01|m|Canaleta de drenaje de polipropileno.|844.03|021023|0|
+~D|HID.04.01|MO_003\1\0.5\MO_005\1\0.5\MT_HM30\1\0.3\MT_CN\1\1\MT_SIF\1\0.2\%MA.7\1\0.07\|
+~C|HID.04.02|u|Paso canadiense de acero sobre estribos de hormigón armado|2480.17|221019|0|
+~D|HID.04.02|MO_003\1\5\MO_005\1\5\MAQ.RET.10\1\1\MAQ_CAM.GRU\1\0.5\MT_HM30\1\1\MT_HA30\1\1\MT_CND\1\1\%MA.7\1\0.07\|
+~C|MAQ.CAR.14|h|Pala cargadora s/neumáticos 8-14t|80.05|221019|2|
+~C|MAQ.COMP|h|Compactador duplex manual,700 kg|8.56|221019|2|
+~C|MAQ.RET.10|h|Retroexcavadora s/neumáticos 8-10t|55.23|221019|2|
+~C|MAQ.ROD.|h|Rodillo vibratorio autopropulsado,12-14t|73.12|221019|2|
+~C|MAQ_CAM.GRU|h|Camión grúa|49.28|221019|2|
+~C|MO.006|h|Peón|21.6|021023|1|
+~C|MOV.02.01|m³|Excav.zanja;anch:<1m;profund.<2m;terreno n/clasf.;retroexc.|11.01|221019|0|
+~D|MOV.02.01|MO.006\1\0.08\MAQ.RET.10\1\0.155\%MA.7\1\0.07\|
+~C|MOV.02.02|m³|Excav.pozo aislado h2-4m,terreno n/clasf.,medios mecánicos,carga|15.66|221019|0|
+~D|MOV.02.02|MO.006\1\0.01\MAQ.RET.10\1\0.261\%MA.7\1\0.07\|
+~C|MOV.03.01|m³|Relleno+comp.zanja,anch.0,6-1,5m,50% arena+50% tierra excav. ,e<|31.67|221019|0|
+~D|MOV.03.01|MO.006\1\0.22\MT.ARE.35\1\0.9\MAQ.RET.10\1\0.121\MAQ.COMP\1\0.22\%MA.7\1\0.07\|
+~C|MOV.03.02|m³|Relleno zanja/pozo arenas reciclado mixto,<=25cm|20.66|221019|0|
+~D|MOV.03.02|MO.006\1\0.025\MT.ARE.50\1\2.09\MAQ.CAR.14\1\0.016\%MA.7\1\0.07\|
+~C|MOV.03.03|m³|Relleno con material drenante|81.66|221019|0|
+~D|MOV.03.03|MO_005\1\0.35\MAQ.RET.10\1\0.1\MAQ.ROD.\1\0.35\MT.GRV.DR\1\1.5\%MA.7\1\0.07\|
+~C|MOV.04.01|m|Excavación de cunetas, con medios mecánicos.|4.46|221019|0|
+~D|MOV.04.01|MO.006\1\0.014\MAQ.RET.10\1\0.07\%MA.7\1\0.07\|
+~C|MO_003|h|Oficial 1a|25.59|021023|1|
+~C|MO_005|h|Ayudante|22.02|021023|1|
+~C|MT.ARE.35|t|Arena 0-3,5 mm|18.1|221019|3|
+~C|MT.ARE.50|t|Arena de reciclado mixto horm./cerám. 0-5mm|8.37|221019|3|
+~C|MT.GAV|u|Gavión|75|220526|3|
+~C|MT.GRV.DR|t|Grava filtrante sin clasificar.|25|220526|3|
+~C|MT.PVC.AE|u|Ampliación excéntrica H-H DN110/160|6|220526|3|
+~C|MT.PVC.IR|u|Injerto reducido M-H 45º Dn315/160|50|220526|3|
+~C|MT_CN|m|Canaleta de drenaje|650|250526|3|
+~C|MT_CND|u|Estructura de acero para paso canadiense|1700|250526|3|
+~C|MT_HA30|m³|Hormigón HA-30/B/20/XC4+XA2, fabricado en central, con cemento S|150|220526|3|
+~C|MT_HM30|m³|Hormigón HM-30/B/20/X0+XA2, fabricado en central, con cemento SR|150|220526|3|
+~C|MT_JUNT.1000|u|Junta|120|220526|3|
+~C|MT_LUB|kg|Luibricante para unión con junta elástica|3|220526|3|
+~C|MT_ME.20X20|kg|Malla electrosoldada ME 20x20 Ø 8-8 B 500 T 6x2,20 UNE-EN 10080.|2|220526|3|
+~C|MT_PER.110|m|Tubería PEAD DN110|4.5|220526|3|
+~C|MT_POZ.1|u|Pozo de registro DN1000 m|1700|220526|3|
+~C|MT_PVC.160|m|Tubería PVC DN160 SN4|29|260526|3|
+~C|MT_PVC.315|m|Tubería PVC DN315 SN4|30.65|110222|3|
+~C|MT_SIF|u|Sifón|350|250526|3|
+~C|MT_TAPA|u|Tapa circular 0,6 m|120|220526|3|
+~C|SF##|||602630.88|221019|0|
+~D|SF##|01\1\1\02\1\1\03\1\1\04\1\1\|
+~T|DEM.01.01|Demolición de pavimento continuo de hormigón en masa de 10 cm de espesor, con martillo neumático, sin deteriorar los elementos constructivos contiguos, y carga manual sobre camión o contenedor.|
+~T|EST.01.01|Muro de gaviones con una cara vista, de 2000x1000x1000 mm de malla electrosoldada, de alambre de acero galvanizado de 4,5 mm de diámetro, con una apertura de malla de 50x100 mm en las caras vistas y de 100x100 mm en las caras ocultas; con diafragma intermedio de 1000x1000 m de malla electrosoldada, de alambre de acero galvanizado de 4,5 mm de diámetro, con una apertura de malla de 100x100 mm, grapado perpendicularmente a las mallas de cara, traseras, suelo y tapa del gavión; y relleno con medios mecánicos con cantos rodados, de granulometría comprendida entre 70 y 250 mm; montaje y desmontaje del sistema de encofrado necesario para evitar la deformación de los gaviones durante su llenado y asegurar la alineación y aplomado de la estructura. Incluso tensores y grapas para conformar adecuadamente los gaviones.|
+~T|HID.01.01|Suministro y montaje de tubería diametro nominal 315mm COMPACTO de PVC, para SN4, fabricada según UNE EN 1401 con certificado AENOR, color Naranja Teja. Incluso unión de tuberías por junta integrada de caucho reforzada con anillo metálico en el interior de la junta según norma EN 681-1.|
+~T|HID.01.02|Suministro y colocación de tubería drenante corrugada de doble pared de Polietileno de Alta Densidad (PEAD), diámetro nominal 110 mm, sistema DP (ranurado hasta la zona próxima a los riñones del tubo), rigidez circunferencial SN4, fabricada según UNE 53994 EX, color negro. Incluso unión de tuberías mediante manguito integrado y junta de estanqueidad de caucho según norma EN 681-1. Incluso geotextil para recubrir la tubería.|
+~T|HID.01.03|Suministro y montaje de tubería diametro nominal 160mm COMPACTO de PVC, para SN4, fabricada según UNE EN 1401 con certificado AENOR, color Naranja Teja. Incluso unión de tuberías por junta integrada de caucho reforzada con anillo metálico en el interior de la junta según norma EN 681-1.|
+~T|HID.02.01|Suministro y colocación de acometida de tubería drenante a colector de saneamiento enterrado, formada por ampliación excéntrica hembra-macho DN110/160 (ref. AE110/160SAN) e injerto reducido macho-hembra 45° DN315/160 (ref. IMH315/160-45SA), de PVC, color naranja teja. Incluso lubricante, juntas de estanqueidad de caucho según EN 681-1 y pequeño material. Totalmente instalada y comprobada.|
+~T|HID.03.01|Pozo de registro con escalera de PVC corrugado, de diámetro nominal 1000 mm y altura nominal 3 m, para colector de 315 mm de diámetro, con base ciega, sobre solera de 30 cm de espesor de hormigón armado HA-30/B/20/XC4+XA2, encastre del cuerpo del colector 10 cm en dicha solera, ligeramente armada con malla electrosoldada ME 20x20 Ø 8-8 B 500 T 6x2,20 UNE-EN 10080, con junta de estanqueidad en la unión del cuerpo del pozo y el cono de reducción, y losa alrededor de la boca del cono de 150x150 cm y 20 cm de espesor de hormigón en masa HM-30/B/20/X0+XA2, con cierre de tapa circular con bloqueo y marco de fundición clase D-400 según UNE-EN 124, instalado en calzadas de calles, incluyendo las peatonales, o zonas de aparcamiento para todo tipo de vehículos.|
+~T|HID.04.01|Canaleta prefabricada de drenaje para uso público de polipropileno, con refuerzo lateral de acero galvanizado, de 1000 mm de longitud, 300 mm de anchura y 374 mm de altura, con rejilla de fundición dúctil clase D-400 según UNE-EN 1433 y UNE-EN 124. Incluso demolición del pavimento, excavación, carga de escombros, transporte a gestor autorizado y relleno con material adecuado.|
+~T|HID.04.02|Construcción de paso canadiense formado por reja metálica prefabricada galvanizada en caliente, de 1,50 m de ancho y longitud variable hasta 4,00 m, con travesaños de acero de perfil plano, sobre estribos laterales de hormigón armado HA-25/B/20/IIa con armadura de acero B500S. Incluye demolición de pavimento de hormigón existente con medios mecánicos, retirada de escombros a vertedero, excavación de pozos para estribos, encofrado, hormigonado, armado, suministro y colocación de reja, y reposición de pavimento de hormigón HM-20 en zona de acceso. Totalmente ejecutado.|
+~T|MAQ.CAR.14|Pala cargadora sobre neumáticos de 8 a 14 t|
+~T|MAQ.COMP|Compactador duplex manual de 700 kg|
+~T|MAQ.RET.10|Retroexcavadora sobre neumáticos de 8 a 10 t|
+~T|MAQ.ROD.|Rodillo vibratorio autopropulsado, de 12 a 14 t|
+~T|MAQ_CAM.GRU|Camión grúa|
+~T|MO.006|Peón|
+~T|MOV.02.01|Excavación de zanja de hasta 1 m de anchura y hasta 2 m de produndidad, en terreno no clasificado, con retroexcavadora y carga directa sobre camión|
+~T|MOV.02.02|Excavación de pozo aislado de 2 a 4 m de profundidad, en terreno no clasificado, con medios mecánicos y carga directa sobre camión.|
+~T|MOV.03.01|Relleno y compactación de zanja de ancho más de 0,6 y hasta 1,5 m, con el 50% de arena y el 50% de tierra de la propia excavación, en tongadas de espesor de hasta 25 cm, utilizando pisón vibrante, con compactación del 95% PM|
+~T|MOV.03.02|Relleno de zanja o pozo con arenas de material reciclado mixto, en tongadas de 25 cm como máximo|
+~T|MOV.03.03|Relleno con grava filtrante sin clasificar, para drenaje de las aguas procedentes de lluvia y compactación en tongadas sucesivas de 30 cm de espesor máximo con rodillo vibrante de guiado manual. Incluso geotextil para recubrir el material drenante.|
+~T|MOV.04.01|Excavación de cunetas de sección trapezoidal en terreno de tránsito compacto, de hasta 1,25 m de profundidad máxima, con medios mecánicos, y carga a camión. El precio no incluye el transporte de los materiales excavados.|
+~T|MO_003|Oficial 1a|
+~T|MO_005|Ayudante montador|
+~T|MT.ARE.35|Arena de cantera de 0 a 3,5 mm|
+~T|MT.ARE.50|Arena de material reciclado mixto de hormigón-cerámica de 0 a 5 mm|
+~T|MT.PVC.AE|Ampliación excéntrica H-M DN110/160 (AE110/160SAN)|
+~T|MT.PVC.IR|Injerto reducido M-H 45° DN315/160 (IMH315/160-45SA)|
+~T|MT_CN|Canaleta prefabricada de drenaje para uso público de polipropileno, con refuerzo lateral de acero galvanizado, de 1000 mm de longitud, 300 mm de anchura y 374 mm de altura, con rejilla de fundición dúctil clase D-400 según UNE-EN 1433 y UNE-EN 124, incluso piezas especiales.	
+|
+~T|MT_HA30|Hormigón HA-30/B/20/XC4+XA2, fabricado en central, con cemento SR.|
+~T|MT_HM30|Hormigón HM-30/B/20/X0+XA2, fabricado en central, con cemento SR.|
+~T|MT_JUNT.1000|Junta de goma para tubería corrugada de 1000 mm de diámetro nominal.|
+~T|MT_LUB|Lubricante para unión con junta elástica, en pozos de registro prefabricados.|
+~T|MT_ME.20X20|Malla electrosoldada ME 20x20 Ø 8-8 B 500 T 6x2,20 UNE-EN 10080.
+|
+~T|MT_POZ.1|Pozo de registro con escalera de diámetro nominal 1000 mm y altura nominal 3 m, para colector de 315 mm de diámetro, totalmente estanco según UNE-EN 476, compuesto por cuerpo de PVC de doble pared, la exterior corrugada y la interior lisa, color teja RAL 8023, rigidez anular nominal 8 kN/m², con los pates instalados, ciego (sin taladros prefabricados, de modo que las acometidas y entronques del colector se perforen y fabriquen in situ), base ciega de polietileno de alta densidad equipada con junta de estanqueidad, y cono reductor de polietileno de alta densidad, de 600 mm de diámetro nominal en la boca, para colocar sobre el cuerpo del pozo.|
+~T|MT_PVC.315|Suministro de tubería diametro nominal 315mm COMPACTO de PVC, para SN4, fabricada según UNE EN 1401 con certificado AENOR, color Naranja Teja. Unión de tuberías por junta integrada de caucho reforzada con anillo metálico en el interior de la junta según norma EN 681-1.|
+~T|MT_TAPA|Tapa circular con bloqueo mediante tres pestañas y marco de fundición dúctil de 850 mm de diámetro exterior y 100 mm de altura, paso libre de 600 mm, para pozo, clase D-400 según UNE-EN 124. Tapa revestida con pintura bituminosa y marco provisto de junta de insonorización de polietileno y dispositivo antirrobo.|
+~M|01#\DEM.01.01|1\1\|655.6|\PVC DN315\\\\\\Colector 1\1.1\630\0.8\\\Colector 2\1.1\115\0.8\\|
+~M|01#\MOV.02.01|1\2\|1048.96|\PVC DN315\\\\\\Colector 1\1.1\630\0.8\1.6\\Colector 2\1.1\115\0.8\1.6\|
+~M|01#\MOV.02.02|1\3\|121.5|\Colector 1\16\1.5\1.5\3\\Colector 2\2\1.5\1.5\3\|
+~M|01#\MOV.03.01|1\4\|721.16|\PVC DN315\\\\\\Colector 1\1.1\630\0.8\1.1\\Colector 2\1.1\115\0.8\1.1\|
+~M|01#\MOV.03.02|1\5\|524.48|\PVC DN315\\\\\\Colector 1\1.1\630\0.8\0.8\\Colector 2\1.1\115\0.8\0.8\|
+~M|01#\HID.01.01|1\7\|819.5|\PVC DN315\\\\\\Colector 1\1.1\630\\\\Colector 2\1.1\115\\\|
+~M|01#\HID.03.01|1\10\|18|\Colector 1\16\\\\\Colector 2\2\\\\|
+~M|02.01#\MOV.02.01|2\1\1\|443.96|\PVC DN315\\\\\\Colector 2.1\1\237\0.8\1.6\\Colector 2.2\1\28\0.8\1.6\\PEAD DN110\\\\\\Colector 2.1\1\50\0.6\0.6\\Colector 2.1\1\135\0.6\0.6\\Colector 2.1\1\26\0.6\0.6\\Colector 2.1\1\27\0.6\0.6\\Colector 2.1\1\28\0.6\0.6\\Colector 2.1\1\25\0.6\0.6\|
+~M|02.01#\MOV.02.02|2\1\2\|67.5|\Colector 2.1\9\1.5\1.5\3\\Colector 2.2\1\1.5\1.5\3\|
+~M|02.01#\MOV.03.01|2\1\3\|233.2|\PVC DN315\\\\\\Colector 2.1\1\237\0.8\1.1\\Colector 2.2\1\28\0.8\1.1\|
+~M|02.01#\MOV.03.02|2\1\4\|127.2|\PVC DN315\\\\\\Colector 2.1\1\237\0.8\0.6\\Colector 2.2\1\28\0.8\0.6\|
+~M|02.01#\MOV.03.03|2\1\5\|136.76|\PEAD DN110\\\\\\Colector 2.1\1\50\0.6\0.6\\Colector 2.1\1\135\0.6\0.6\\Colector 2.1\1\26\0.6\0.6\\Colector 2.1\1\27\0.6\0.6\\Colector 2.1\1\28\0.6\0.6\\Colector 2.1\1\25\0.6\0.6\\GAVIONES\\\\\\Colectores\4\2\2\2\|
+~M|02.01#\HID.01.01|2\1\6\|265|\PVC DN315\\\\\\Colector 2.1\1\237\\\\Colector 2.2\1\28\\\|
+~M|02.01#\HID.01.02|2\1\7\|291|\PEAD DN110\\\\\\Colector 2.1\1\50\\\\Colector 2.1\1\135\\\\Colector 2.1\1\26\\\\Colector 2.1\1\27\\\\Colector 2.1\1\28\\\\Colector 2.1\1\25\\\|
+~M|02.01#\HID.02.01|2\1\8\|6|\Colector 2.1\6\\\\|
+~M|02.01#\HID.03.01|2\1\9\|10|\Colector 2.1\9\\\\\Colector 2.2\1\\\\|
+~M|02.01#\EST.01.01|2\1\10\|10|\Colector 2\1\10\\\|
+~M|02.02#\MOV.02.01|2\2\1\|72.96|\PVC DN160\\\\\\Conexión imbornal - pozo\\\\\\Cuenca S-O\1\13\0.8\1.6\\Cuenca S-O\1\5\0.8\1.6\\Cuenca S-E\1\13\0.8\1.6\\Cuenca S-E\1\9\0.8\1.6\\Carretera 1\1\8\0.8\1.6\\Carretera 2\1\5\0.8\1.6\\Carretera 3\1\4\0.8\1.6\|
+~M|02.02#\MOV.03.01|2\2\2\|50.16|\PVC DN160\\\\\\Conexión imbornal - pozo\\\\\\Cuenca S-O\1\13\0.8\1.1\\Cuenca S-O\1\5\0.8\1.1\\Cuenca S-E\1\13\0.8\1.1\\Cuenca S-E\1\9\0.8\1.1\\Carretera 1\1\8\0.8\1.1\\Carretera 2\1\5\0.8\1.1\\Carretera 3\1\4\0.8\1.1\|
+~M|02.02#\MOV.03.02|2\2\3\|27.36|\PVC DN160\\\\\\Conexión imbornal - pozo\\\\\\Cuenca S-O\1\13\0.8\0.6\\Cuenca S-O\1\5\0.8\0.6\\Cuenca S-E\1\13\0.8\0.6\\Cuenca S-E\1\9\0.8\0.6\\Carretera 1\1\8\0.8\0.6\\Carretera 2\1\5\0.8\0.6\\Carretera 3\1\4\0.8\0.6\|
+~M|02.02#\MOV.04.01|2\2\4\|307|\FASE 1\\\\\\Cuenca N\\\\\\\1\25\\\\\1\40\\\\Cuenca S-O\\\\\\\1\50\\\\\1\47\\\\\1\87\\\\Cuenca S-E\\\\\\\1\29\\\\\1\29\\\|
+~M|02.02#\HID.01.03|2\2\5\|57|\PVC DN160\\\\\\Conexión imbornal - pozo\\\\\\Cuenca S-O\1\13\\\\Cuenca S-O\1\5\\\\Cuenca S-E\1\13\\\\Cuenca S-E\1\9\\\\Carretera 1\1\8\\\\Carretera 2\1\5\\\\Carretera 3\1\4\\\|
+~M|02.02#\HID.04.01|2\2\6\|131.6|\Cuenca N\1\16\\\\Cuenca S-E\1\3.9\\\\Cuenca S-E\1\4.6\\\\Cuenca S-E\1\4.6\\\\Cuenca S-E\2\5\\\\Cuenca S-O\2\14\\\\Cuenca S-O\2\12\\\\Cuenca S-O\2\17.5\\\\Cuenca S-O\1\5.5\\\\\\\\\|
+~M|02.02#\HID.04.02|2\2\7\|3|\Cuenca N\2\\\\\Cuenca S-E\1\\\\|
+~M|03.01#\MOV.02.01|3\1\1\|308.68|\PVC DN315\\\\\\Colector 4\1\161\0.8\1.6\\PEAD DN110\\\\\\Colector 4\1\16\0.6\0.6\\Colector 4\1\17\0.6\0.6\\Colector 4\1\31\0.6\0.6\\Colector 4\1\71\0.6\0.6\\Colector 4\1\61\0.6\0.6\\Colector 4\1\31\0.6\0.6\\Colector 4\1\27\0.6\0.6\\Colector 4\1\17\0.6\0.6\\Colector 4\1\14\0.6\0.6\|
+~M|03.01#\MOV.02.02|3\1\2\|20.25|\Colector 4\3\1.5\1.5\3\|
+~M|03.01#\MOV.03.01|3\1\3\|291.28|\PVC DN315\\\\\\Colector 4\1\161\0.8\1.1\\Colector 2.2\1\170\0.8\1.1\|
+~M|03.01#\MOV.03.02|3\1\4\|211.84|\PVC DN315\\\\\\Colector 4\1\161\0.8\0.8\\Colector 2.2\1\170\0.8\0.8\|
+~M|03.01#\MOV.03.03|3\1\5\|134.6|\PEAD DN110\\\\\\Colector 4\1\16\0.6\0.6\\Colector 4\1\17\0.6\0.6\\Colector 4\1\31\0.6\0.6\\Colector 4\1\71\0.6\0.6\\Colector 4\1\61\0.6\0.6\\Colector 4\1\31\0.6\0.6\\Colector 4\1\27\0.6\0.6\\Colector 4\1\17\0.6\0.6\\Colector 4\1\14\0.6\0.6\\GAVIONES\\\\\\Colector 4\1\4\4\2\|
+~M|03.01#\HID.01.01|3\1\6\|331|\PVC DN315\\\\\\Colector 4\1\161\\\\Colector 2.2\1\170\\\|
+~M|03.01#\HID.01.02|3\1\7\|285|\PEAD DN110\\\\\\Colector 4\1\16\\\\Colector 4\1\17\\\\Colector 4\1\31\\\\Colector 4\1\71\\\\Colector 4\1\61\\\\Colector 4\1\31\\\\Colector 4\1\27\\\\Colector 4\1\17\\\\Colector 4\1\14\\\|
+~M|03.01#\HID.02.01|3\1\8\|9|\Colector 4\9\\\\|
+~M|03.01#\HID.03.01|3\1\9\|3|\Colector 4\3\\\\|
+~M|03.01#\EST.01.01|3\1\10\|10|\Colector 4\1\10\\\|
+~M|03.02#\MOV.02.01|3\2\1\|396.8|\PVC DN315\\\\\\Cuenca S-O\1\170\0.8\1.6\\Cuenca N-O\1\91\0.8\1.6\\PVC DN160\\\\\\Cuenca N\1\33\0.8\1.6\\Cuenca S-O\1\16\0.8\1.6\|
+~M|03.02#\MOV.03.01|3\2\2\|272.8|\PVC DN315\\\\\\Cuenca S-O\1\170\0.8\1.1\\Cuenca N-O\1\91\0.8\1.1\\PVC DN160\\\\\\Cuenca N\1\33\0.8\1.1\\Cuenca S-O\1\16\0.8\1.1\|
+~M|03.02#\MOV.03.02|3\2\3\|198.4|\PVC DN315\\\\\\Cuenca S-O\1\170\0.8\0.8\\Cuenca N-O\1\91\0.8\0.8\\PVC DN160\\\\\\Cuenca N\1\33\0.8\0.8\\Cuenca S-O\1\16\0.8\0.8\|
+~M|03.02#\MOV.04.01|3\2\4\|752|\FASE 1\\\\\\Cuenca N\\\\\\\1\71\\\\\1\91\\\\Cuenca S-O\\\\\\\1\94\\\\\1\143\\\\Cuenca N-O\\\\\\\1\194\\\\\1\159\\\|
+~M|03.02#\HID.01.01|3\2\5\|261|\PVC DN315\\\\\\Cuenca S-O\1\170\\\\Cuenca N-O\1\91\\\|
+~M|03.02#\HID.01.03|3\2\6\|62.72|\PVC DN160\\\\\\Cuenca N\1\33\0.8\1.6\\Cuenca S-O\1\16\0.8\1.6\|
+~M|03.02#\HID.04.02|3\2\7\|5|\Cuenca S-O\3\\\\\Cuenca N-O\2\\\\|
+~M|04.01#\MOV.02.01|4\1\1\|846.92|\PVC DN315\\\\\\Colector 1\1\276\0.8\1.6\\Colector 3\1\184\0.8\1.6\\PEAD DN110\\\\\\Colector 2.1\1\58\0.6\0.6\\Colector 2.1\1\58\0.6\0.6\\Colector 2.1\1\58\0.6\0.6\\Colector 2.1\1\59\0.6\0.6\\Colector 1\2\45\0.6\0.6\\Colector 1\2\52\0.6\0.6\\Colector 1\2\43\0.6\0.6\\Colector 1\2\23\0.6\0.6\\Colector 1\2\30\0.6\0.6\\Colector 3\2\21\0.6\0.6\\Colector 3\1\22\0.6\0.6\\Colector 3\1\34\0.6\0.6\|
+~M|04.01#\MOV.03.01|4\1\2\|404.8|\PVC DN315\\\\\\Colector 1\1\276\0.8\1.1\\Colector 3\1\184\0.8\1.1\|
+~M|04.01#\MOV.03.02|4\1\3\|294.4|\PVC DN315\\\\\\Colector 1\1\276\0.8\0.8\\Colector 3\1\184\0.8\0.8\|
+~M|04.01#\MOV.03.03|4\1\4\|274.12|\PEAD DN110\\\\\\Colector 2.1\1\58\0.6\0.6\\Colector 2.1\1\58\0.6\0.6\\Colector 2.1\1\58\0.6\0.6\\Colector 2.1\1\59\0.6\0.6\\Colector 1\2\45\0.6\0.6\\Colector 1\2\52\0.6\0.6\\Colector 1\2\43\0.6\0.6\\Colector 1\2\23\0.6\0.6\\Colector 1\2\30\0.6\0.6\\Colector 3\2\21\0.6\0.6\\Colector 3\1\22\0.6\0.6\\Colector 3\1\34\0.6\0.6\\GAVIONES\\\\\\Colector 1\1\2\2\2\\Colector 3\1\2\2\2\|
+~M|04.01#\MOV.02.02|4\1\5\|121.5|\PVC DN315\\\\\\Colector 1\12\1.5\1.5\3\\Colector 3\6\1.5\1.5\3\|
+~M|04.01#\HID.01.01|4\1\6\|460|\PVC DN315\\\\\\Colector 1\1\276\\\\Colector 3\1\184\\\|
+~M|04.01#\HID.01.02|4\1\7\|717|\PEAD DN110\\\\\\Colector 2.1\1\58\\\\Colector 2.1\1\58\\\\Colector 2.1\1\58\\\\Colector 2.1\1\59\\\\Colector 1\2\45\\\\Colector 1\2\52\\\\Colector 1\2\43\\\\Colector 1\2\23\\\\Colector 1\2\30\\\\Colector 3\2\21\\\\Colector 3\1\22\\\\Colector 3\1\34\\\|
+~M|04.01#\HID.02.01|4\1\8\|18|\PVC DN315\\\\\\Colector 1\10\\\\\Colector 2.1\4\\\\\Colector 3\4\\\\|
+~M|04.01#\HID.03.01|4\1\9\|18|\PVC DN315\\\\\\Colector 1\12\\\\\Colector 3\6\\\\|
+~M|04.01#\EST.01.01|4\1\10\|20|\GAVIONES\\\\\\Colector 1\1\10\\\\Colector 3\1\10\\\|
+~M|04.02#\MOV.02.01|4\2\1\|118.44|\PVC DN315\\\\\\Cuenca N-O\1\65\0.8\1.6\\Cuenca N-O\1\8\0.8\1.6\\PVC DN160\\\\\\Cuenca N-O\1\6\\\\Cuenca S-O\1\19\\\|
+~M|04.02#\MOV.03.01|4\2\2\|93.44|\PVC DN315\\\\\\Cuenca N-O\1\65\0.8\1.6\\Cuenca N-O\1\8\0.8\1.6\|
+~M|04.02#\MOV.03.02|4\2\3\|93.44|\PVC DN315\\\\\\Cuenca N-O\1\65\0.8\1.6\\Cuenca N-O\1\8\0.8\1.6\|
+~M|04.02#\MOV.04.01|4\2\4\|848|\Cuena N\\\\\\\1\122\\\\Cuena N-O\\\\\\\1\72\\\\\1\104\\\\\1\203\\\\\1\165\\\\Cuenca S-O\\\\\\\1\93\\\\\1\89\\\|
+~M|04.02#\HID.01.01|4\2\5\|93.44|\PVC DN315\\\\\\Cuenca N-O\1\65\0.8\1.6\\Cuenca N-O\1\8\0.8\1.6\|
+~M|04.02#\HID.01.03|4\2\6\|25|\PVC DN160\\\\\\Cuenca N-O\1\6\\\\Cuenca S-O\1\19\\\|
+~M|04.02#\HID.04.01|4\2\7\|4|\Cuenca N-O\1\4\\\|
+~M|04.02#\HID.04.02|4\2\8\|2|\Cuenca S-O\2\\\\|

@@ -35,6 +35,10 @@ env/
 # Se permite el ejemplo de demostración; el resto de .bc3 se ignora.
 *.bc3
 !ejemplo_son_font.bc3
+# Archivos de prueba para los tests de regresión (necesarios en cualquier clon).
+!tests/Test_SONFONT.bc3
+!tests/Test_REDONDEO.bc3
+!tests/Test_Alqueria.bc3
 
 # --- Informes generados ---
 informe_*.html
