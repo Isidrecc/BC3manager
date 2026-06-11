@@ -1,0 +1,24 @@
+{
+  "name": "BEDEC",
+  "version": "2020-01-14",
+  "description": {
+    "cultures": true,
+    "stvalue": [
+      "BEDEC dinàmic",
+      "BEDEc dinámico"
+    ],
+    "dblvalue": null
+  },
+  "adaptblocksize": 300,
+  "id_application": 2,
+  "cultures": [
+    {
+      "culture": "ca-ES",
+      "index": 0
+    },
+    {
+      "culture": "es-ES",
+      "index": 1
+    }
+  ]        
+}

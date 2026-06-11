@@ -1,0 +1,26 @@
+{
+  "status": {
+    "returncode": 0,
+    "messages": []
+  },
+  "data": {
+    "id": 15729,
+    "status": "finished",
+    "started": false,
+    "finished": true,
+    "running": false,
+    "queue_position": null,
+    "start_time": {
+      "cultures": false,
+      "stvalue": [ "2012-04-23T18:25:43.511Z"  ],
+      "dblvalue": null
+    },
+    "end_time": {
+      "cultures": false,
+      "stvalue": [ "2012-04-23T10:26:34.521Z"  ],
+      "dblvalue": null
+    },
+    "savedresult":true,
+    "origen":"adapta tcq"
+  }
+}

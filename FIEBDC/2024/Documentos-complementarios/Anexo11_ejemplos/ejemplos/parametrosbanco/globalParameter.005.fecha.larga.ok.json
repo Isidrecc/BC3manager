@@ -1,0 +1,11 @@
+{
+  "name": "parametro fecha y tiempo",
+  "id_property": -6,
+  "type": "D",
+  "globalparametervalues": [{
+    "id_value": 1169172,
+    "cultures": false,
+    "stvalue": [ "2012-04-23T18:25:43.511Z" ],
+    "dblvalue": null
+  }]
+}

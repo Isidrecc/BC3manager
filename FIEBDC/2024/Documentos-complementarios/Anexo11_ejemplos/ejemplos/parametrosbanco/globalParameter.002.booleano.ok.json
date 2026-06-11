@@ -1,0 +1,11 @@
+{
+  "name": "parametro booleano true",
+  "id_property": -6,
+  "type": "B",
+  "globalparametervalues": [{
+    "id_value": 1169172,
+    "cultures": false,
+    "stvalue": [],
+    "dblvalue": 1
+  }]
+}

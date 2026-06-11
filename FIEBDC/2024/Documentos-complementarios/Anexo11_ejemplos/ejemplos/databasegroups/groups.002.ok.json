@@ -1,0 +1,11 @@
+{
+	"id": 10,
+	"description": {
+    "cultures": true,
+    "stvalue": [
+      "Bases de datos de construcción",
+      "Bases de dades de la construcció"
+    ],
+    "dblvalue": null
+  }
+}

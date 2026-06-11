@@ -1,0 +1,28 @@
+{
+  "status": {
+    "returncode": 0,
+    "messages": []
+  },
+  "database": {
+    "name": "BEDEC",
+    "version": "2019-12-09",
+  },
+  "globalparameters": [
+      {
+        "name": "parametre1",
+        "id_property": -6,
+        "type": "N",
+        "globalparametervalues": [{
+          "id_value": 1169172,
+          "cultures": false,
+          "stvalue": [],
+          "dblvalue": 100
+        }]
+      }
+  ],
+  "payload": {
+    "format": "bc3",
+    "compression": null,
+    "content": "flZ8UklCIFNwYWlufEZJRUJEQy0zLzIwMjB8UHJlc3RvIDIxLjAzfHxBTlNJfHwyfHx8fA0Kfkx8fEVTUFxFc3BlY2lmaWNhY2nDs1xURUNcQ2FyYWN0ZXLDrXN0aXF1ZXMgdMOoY25pcXVlc1xQUkVcQ29uZGljaW9ucyBwcsOodmllc1xFSkVcRXhlY3VjacOzXE1FRFxBbWlkYW1lbnRcQ09OXENvbnRyb2xcU0VHXFNlZ3VyZXRhdCBpIHNhbHV0XEdNQVxHZXN0acOzIGFtYmllbnRhbFxOT1JcTm9ybWVzIGTCkmFwbGljYWNpw7NcTUFOXE1hbnRlbmltZW50XFZBUlxEaXZlcnNvc1xURVhcVGV4dCBzZW5zZSDDoG1iaXRcfA0Kfkt8XDJcMlwzXDJcMlwyXDJcXHwwXDBcMFwwXDB8M1wyXFwzXDNcXDJcMlwyXDJcMlwyXDJcMlxcfA0Kflh8fHBvc3RcQ29udGluZ3V0IHJlY2ljbGF0IHBvc3Rjb25zdW1cJVxwcmVcQ29udGluZ3V0IHJlY2ljbGF0IHByZWNvbnN1bVwlXGNlXENvc3QgRW5lcmfDqHRpY1xNSlxsZXJcQ29kaSBsZXIgZGUgbGEgbGxpc3RhIGV1cm9wZWEgZGUgcmVzaWR1c1xcbXBcTWF0w6hyaWEgcHJpbWVyYVwlXG1cbWFzc2Fca2dcdlx2b2x1bVxtM1xlQ08yXEVtaXNzacOzIGRlIENPMlxrZ1x8DQp+Q3wwIyN8fFBzdG8gRXZhIEp8MHwwNDA1MjJ8MHwNCn5EfDAjI3xQNDRDLURQMkZcMVwwXFA0NDItREZaOFwxXDBcUDQ1MTAtRDU0VFwxXDBcUDQ1OTAtRjhEVVwxXDBcUEUyMi0zNjdVXDFcMFxQRTQwLTYwQjZcMVwwXFBFTjItOUc3M1wxXDBcUEoyMTAtM1lLTFwxXDBcUEoyMU0tRklDOFwxXDBcfA=="
+  }
+}

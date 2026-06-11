@@ -34,6 +34,21 @@ def _redondea(x: float, dec: int) -> float:
     return float(Decimal(str(x)).quantize(q, rounding=ROUND_HALF_UP))
 
 
+def _mult_red(a: float, b: float, dec: int) -> float:
+    """Multiplica dos magnitudes en aritmética DECIMAL exacta y redondea
+    mitad-arriba a `dec` decimales, como hace Presto.
+
+    Hacer la multiplicación en float arrastra el error binario: p.ej.
+    0,015 × 27,49 da 0,41234999… en float (debería ser 0,41235), y entonces
+    el redondeo a 4 decimales baja a 0,4123 en vez de subir a 0,4124. Operando
+    en Decimal el producto es exacto (0,41235) y el redondeo coincide con
+    Presto. `str()` convierte cada float a su decimal más corto sin el ruido
+    binario."""
+    q = Decimal(1).scaleb(-dec)
+    prod = Decimal(str(a)) * Decimal(str(b))
+    return float(prod.quantize(q, rounding=ROUND_HALF_UP))
+
+
 class TipoConcepto(Enum):
     """Tipo de concepto según su papel en el árbol."""
     CAPITULO = "capitulo"          # Agrupador (incluye obra raíz y subcapítulos)
@@ -172,8 +187,27 @@ class Presupuesto:
         self.dec_cantmed: int = 2        # DecCantMed: cantidades de mediciones
         self.dec_natural: int = 2        # DecNat: precios de conceptos básicos
         self.dec_importe: int = 2        # importes (precio × medición)
-        self.dec_parcial: int = 2        # DecDet: parciales de líneas de medición
+        self.dec_parcial: int = 2        # DSP/DecDet: parciales de líneas de medición
+        # Decimales de las líneas de medición (FIEBDC campo 3 del ~K). Presto
+        # redondea CADA factor a estos decimales ANTES de multiplicar: las
+        # dimensiones a DD y el nº de partes iguales a DN (ambos 2 por defecto).
+        # Sin esto, una altura 0,0475 se multiplica en crudo en vez de 0,05.
+        self.dec_dim: int = 2            # DD: dimensiones (largo/ancho/alto)
+        self.dec_num: int = 2            # DN: nº de partes iguales (uds)
         self.moneda: str = "EUR"         # divisa declarada en el ~K
+        # Coeficientes económicos del campo 2 del registro ~K (FIEBDC):
+        #   CI \ GG \ BI \ BAJA \ IVA   (todos en porcentaje).
+        # Se guardan en tanto por uno (0.06 = 6%). El CI (costes indirectos) es
+        # el único que afecta al PEM: el estándar define el precio de una unidad
+        # de obra como Coste Directo + Coste Indirecto, aplicado POR PARTIDA.
+        # GG/BI/IVA/BAJA se conservan para cálculos posteriores (PEC, total con
+        # IVA) pero no intervienen en el PEM. Valen 0 si el archivo no los
+        # declara (p.ej. Presto 8.8), preservando el cálculo exacto.
+        self.ci_pct: float = 0.0    # Costes Indirectos
+        self.gg_pct: float = 0.0    # Gastos Generales
+        self.bi_pct: float = 0.0    # Beneficio Industrial
+        self.baja_pct: float = 0.0  # Baja/alza de adjudicación
+        self.iva_pct: float = 0.0   # IVA
 
     # ---- Construcción ----------------------------------------------------
 
@@ -215,6 +249,12 @@ class Presupuesto:
                 elif c.hijos:
                     # Con descomposición y unidad → partida; sin unidad → capítulo
                     c.tipo = TipoConcepto.PARTIDA if c.unidad else TipoConcepto.CAPITULO
+                elif c.mediciones:
+                    # Hoja con medición (~M) colgando de un capítulo: es una
+                    # partida (típicamente una partida alzada, unidad "PA"). Los
+                    # recursos básicos nunca llevan mediciones, así que esto los
+                    # distingue de forma fiable.
+                    c.tipo = TipoConcepto.PARTIDA
                 else:
                     c.tipo = TipoConcepto.UNITARIO
 
@@ -289,11 +329,28 @@ class Presupuesto:
                 for h in c.hijos:
                     recorrer(h.codigo_hijo, codigo)
             elif c.tipo == TipoConcepto.PARTIDA:
-                medicion = self.medicion_total(codigo, codigo_padre)
-                p_archivo = precios_archivo.get(codigo, 0) or 0
-                p_calc = c.precio
-                imp_archivo = round(p_archivo * medicion, 2)
-                imp_calc = round(p_calc * medicion, 2)
+                # ESTRICTO: el lado "archivo" usa SOLO valores del archivo
+                # (precio CD del ~C, medición declarada del ~M); el lado "calc"
+                # usa lo que recalculamos (CD del desglose, medición de líneas).
+                med_obj = c.mediciones.get(codigo_padre)
+                # Medición del archivo = total declarado del ~M; si no lo hubiera,
+                # la suma de sus líneas.
+                if med_obj is not None and med_obj.total_declarado:
+                    med_archivo = med_obj.total_declarado
+                else:
+                    med_archivo = self.medicion_total(codigo, codigo_padre)
+                med_calc = self.medicion_total(codigo, codigo_padre)
+                p_archivo = precios_archivo.get(codigo, 0) or 0   # CD del ~C
+                p_calc = c.precio                                  # CD recalculado
+                # Precio con CI (= TOTAL PARTIDA de Presto): CD + costes indirectos.
+                # El ~C puede traer el CD con más decimales que DecPar (p.ej.
+                # 8,8638); Presto lo redondea a DecPar antes de aplicar el CI.
+                p_archivo_red = (_redondea(p_archivo, self.dec_precio_partida)
+                                 if self.redondeo_activo else p_archivo)
+                p_archivo_ci = self._con_ci(p_archivo_red)
+                p_calc_ci = self.precio_con_ci(codigo)
+                imp_archivo = round(p_archivo_ci * med_archivo, 2)  # estricto del archivo
+                imp_calc = round(p_calc_ci * med_calc, 2)           # nuestro cálculo
                 diff = imp_calc - imp_archivo
                 denom = max(abs(imp_archivo), abs(imp_calc))
                 pct = (abs(diff) / denom * 100) if denom > 0 else 0
@@ -302,9 +359,13 @@ class Presupuesto:
                     "padre": codigo_padre,
                     "resumen": c.resumen,
                     "unidad": c.unidad,
-                    "precio_archivo": round(p_archivo, 4),
-                    "precio_calc": round(p_calc, 4),
-                    "medicion": round(medicion, 4),
+                    "precio_archivo": round(p_archivo, 4),       # CD (lo que guarda el ~C)
+                    "precio_calc": round(p_calc, 4),             # CD recalculado
+                    "precio_archivo_ci": round(p_archivo_ci, 4), # CD + CI (Presto)
+                    "precio_calc_ci": round(p_calc_ci, 4),       # CD + CI (calculado)
+                    "medicion_archivo": round(med_archivo, 4),   # ~M declarada (archivo)
+                    "medicion_calc": round(med_calc, 4),         # suma de líneas (calc)
+                    "medicion": round(med_calc, 4),              # compat. (= calc)
                     "importe_archivo": imp_archivo,
                     "importe_calc": imp_calc,
                     "diferencia": round(diff, 2),
@@ -389,9 +450,10 @@ class Presupuesto:
             for padre, m in c.mediciones.items():
                 if padre == "__sin_padre__":
                     continue
-                mediciones_lineas[(cod, padre)] = round(
-                    sum(ln.subtotal for ln in m.lineas), 6
-                )
+                # Suma de líneas con el redondeo de Presto (parcial a DecDet,
+                # total a DecCantMed) para no marcar como descuadre lo que solo
+                # es ruido de redondeo (p.ej. 7907,0325 cruda vs 7907,030 real).
+                mediciones_lineas[(cod, padre)] = self.total_medicion(m)
                 if m.total_declarado:
                     mediciones_declaradas[(cod, padre)] = m.total_declarado
 
@@ -431,6 +493,20 @@ class Presupuesto:
             if not c or not c.hijos:
                 continue
             p_calc = c.precio
+            # El precio recalculado de un capítulo es coste directo (CD), pero el
+            # precio congelado del archivo incluye los costes indirectos. Para
+            # comparar lo mismo con lo mismo, se aplica el CI al CD del capítulo.
+            # Es "agregador" (capítulo o subcapítulo) si su tipo es CAPITULO y al
+            # menos un hijo tiene mediciones o descomposición propia. Así se
+            # excluyen las partidas con descomposición mal clasificadas como
+            # capítulo (todos sus hijos son recursos hoja), cuyo precio de
+            # archivo ya es CD sin CI.
+            es_agregador = c.tipo == TipoConcepto.CAPITULO and any(
+                (hc := self.conceptos.get(h.codigo_hijo)) and (hc.mediciones or hc.hijos)
+                for h in c.hijos
+            )
+            if self.ci_pct and es_agregador:
+                p_calc = p_calc * (1 + self.ci_pct)
             if es_diferente(p_archivo, p_calc):
                 diff = p_calc - p_archivo
                 denom = max(abs(p_archivo), abs(p_calc))
@@ -520,10 +596,20 @@ class Presupuesto:
             concepto = self.conceptos.get(codigo)
             if concepto is None:
                 return 0.0
-            # Concepto hoja sin descomposición: su precio es dato.
+            # Concepto hoja sin descomposición: su precio es dato. Presto almacena
+            # los precios de conceptos BÁSICOS (mano de obra, material, maquinaria)
+            # redondeados a DecNat decimales. Si el ~C trae más decimales (p.ej.
+            # 59,4882 con DecNat=3) hay que redondear ANTES de multiplicar por el
+            # rendimiento, o el subtotal arrastra el error y puede volcar el redondeo
+            # del precio de partida (1,02×59,4882=60,6780 en vez de 1,02×59,488=
+            # 60,6778, que desvía la Suma la partida de 80,00 a 80,01).
             if not concepto.hijos:
-                memo[codigo] = concepto.precio
-                return concepto.precio
+                precio = concepto.precio
+                if self.redondeo_activo and concepto.tipo == TipoConcepto.UNITARIO:
+                    precio = _redondea(precio, self.dec_natural)
+                    concepto.precio = precio
+                memo[codigo] = precio
+                return precio
             # Protección contra ciclos
             if codigo in en_proceso:
                 memo[codigo] = concepto.precio
@@ -544,14 +630,23 @@ class Presupuesto:
                         qty = total * hijo.cantidad / precio_pct
                         if self.redondeo_activo:
                             qty = _redondea(qty, self.dec_cantrend)
-                        sub = precio_pct * qty
+                            sub = _mult_red(precio_pct, qty, self.dec_subtotal)
+                        else:
+                            sub = precio_pct * qty
                     else:
                         sub = total * hijo.cantidad
+                        if self.redondeo_activo:
+                            sub = _redondea(sub, self.dec_subtotal)
                 else:
-                    sub = precio_de(hijo.codigo_hijo) * hijo.cantidad
-                # DecImp: Presto redondea el subtotal de CADA línea antes de sumar.
-                if self.redondeo_activo:
-                    sub = _redondea(sub, self.dec_subtotal)
+                    # Subtotal = precio × rendimiento. La multiplicación se hace en
+                    # Decimal exacto y se redondea a DecImp mitad-arriba (igual que
+                    # Presto); en float, 0,015×27,49 daría 0,41234999… → 0,4123 en
+                    # vez de 0,4124.
+                    if self.redondeo_activo:
+                        sub = _mult_red(precio_de(hijo.codigo_hijo), hijo.cantidad,
+                                        self.dec_subtotal)
+                    else:
+                        sub = precio_de(hijo.codigo_hijo) * hijo.cantidad
                 total += sub
             en_proceso.discard(codigo)
             # Redondeo del precio del concepto: DecPar (partidas) o Dec (capítulos).
@@ -572,27 +667,113 @@ class Presupuesto:
 
     # ---- Importe (precio * medición) ------------------------------------
 
+    def total_medicion(self, med: "Medicion") -> float:
+        """Total de una medición replicando el redondeo de Presto: cada parcial
+        de línea se redondea a DecDet y la suma a DecCantMed.
+
+        Presto NO suma los parciales en crudo: redondea cada línea a DecDet
+        (p.ej. 2823,5325 → 2823,53) y luego redondea el total a DecCantMed. Sin
+        esto, la suma cruda (7907,0325) difiere del total real (7907,030) y el
+        importe sale desviado por unos céntimos. Sin ~K (redondeo_activo=False)
+        se usa la suma a alta precisión (comportamiento histórico)."""
+        if med is None:
+            return 0.0
+        # Sin líneas de detalle: la medición es el total declarado en el ~M
+        # (partidas alzadas / abonaments fixes, p.ej. medición = 1 sin desglose).
+        if not med.lineas:
+            return med.total_declarado
+        if not self.redondeo_activo:
+            return med.total
+        suma = sum(self.parcial_linea(l) for l in med.lineas)
+        return _redondea(suma, self.dec_cantmed)
+
+    def parcial_linea(self, linea: "LineaMedicion") -> float:
+        """Parcial de una línea de medición replicando a Presto: redondea CADA
+        factor antes de multiplicar (nº de partes a DN, dimensiones a DD) y el
+        parcial a DSP. Un factor 0/vacío es neutro (no multiplica). Ej.: altura
+        0,0475 → 0,05 (DD=2) antes de entrar en el producto.
+
+        Sin ~K (redondeo_activo=False) usa el producto crudo (subtotal)."""
+        if not self.redondeo_activo:
+            return linea.subtotal
+        factores = (
+            (linea.n_uds, self.dec_num),
+            (linea.longitud, self.dec_dim),
+            (linea.anchura, self.dec_dim),
+            (linea.altura, self.dec_dim),
+        )
+        # Acumular en Decimal EXACTO: multiplicar los factores en float introduce
+        # error binario (42,30·3·0,25 = 31.724999999999998 en vez de 31,725) y el
+        # ROUND_HALF_UP final baja a 31,72 en lugar de subir a 31,73 como Presto.
+        resultado = Decimal(1)
+        algun_factor = False
+        for valor, dec in factores:
+            if valor != 0:
+                q = Decimal(1).scaleb(-dec)
+                resultado *= Decimal(str(valor)).quantize(q, rounding=ROUND_HALF_UP)
+                algun_factor = True
+        if not algun_factor:
+            return 0.0
+        q = Decimal(1).scaleb(-self.dec_parcial)
+        return float(resultado.quantize(q, rounding=ROUND_HALF_UP))
+
     def medicion_total(self, codigo_hijo: str, codigo_padre: str) -> float:
         """Medición de un concepto dentro de un padre concreto."""
         concepto = self.conceptos.get(codigo_hijo)
         if concepto is None:
             return 0.0
-        med = concepto.mediciones.get(codigo_padre)
-        return med.total if med else 0.0
+        return self.total_medicion(concepto.mediciones.get(codigo_padre))
+
+    def precio_con_ci(self, codigo: str) -> float:
+        """Precio de una partida CON costes indirectos, como lo muestra Presto.
+
+        El estándar FIEBDC define el precio de una unidad de obra como
+        Coste Directo + Coste Indirecto. Presto aplica el % de CI a TODAS las
+        partidas por igual: sobre el coste directo (ya redondeado a DecPar) suma
+        el CI y redondea de nuevo.
+          - 301.0010: round(8,86 × 1,06) = 9,39
+          - 700.001a: round(32,33 × 1,06) = 34,27
+
+        El CD ya incluye cualquier línea interna del desglose, incluidas las
+        líneas de porcentaje tipo %CI / medios auxiliares que el redactor añade
+        sobre ciertas líneas (son un coste más del desglose, NO el CI global).
+        Por eso NO se excluyen: el 6% se aplica encima de todo, igual que Presto.
+
+        Recursos básicos y capítulos devuelven su precio sin tocar. Con
+        ci_pct = 0 (p.ej. Presto 8.8) devuelve el precio tal cual."""
+        c = self.conceptos.get(codigo)
+        if c is None:
+            return 0.0
+        if self.ci_pct and c.tipo == TipoConcepto.PARTIDA:
+            return self._con_ci(c.precio)
+        return c.precio
+
+    def _con_ci(self, precio_cd: float) -> float:
+        """Aplica el coste indirecto a un coste directo, con el redondeo de
+        Presto (a DecPar). round(CD × (1+ci)). Con ci_pct = 0 devuelve el CD."""
+        if not self.ci_pct:
+            return precio_cd
+        if self.redondeo_activo:
+            return _mult_red(precio_cd, 1 + self.ci_pct, self.dec_precio_partida)
+        return round(precio_cd * (1 + self.ci_pct), 2)
 
     def importe_en_padre(self, codigo_hijo: str, codigo_padre: str) -> float:
-        """Importe de una línea hijo dentro de su padre: precio * medición.
+        """Importe de una línea hijo dentro de su padre: precio × medición.
 
         Si no hay medición explícita (sin registros ~M), el importe es 0 — sin
         fallback a la cantidad del ~D. Esto mantiene la coherencia con la
         cantidad mostrada en la UI: si la cantidad es 0, el importe es 0.
+
+        Usa `precio_con_ci`: el precio de partida incluye el CI por partida, tal
+        como hace Presto.
         """
         concepto = self.conceptos.get(codigo_hijo)
         if concepto is None:
             return 0.0
         med = self.medicion_total(codigo_hijo, codigo_padre)
-        imp = concepto.precio * med
-        return _redondea(imp, self.dec_importe) if self.redondeo_activo else round(imp, 2)
+        if self.redondeo_activo:
+            return _mult_red(self.precio_con_ci(codigo_hijo), med, self.dec_importe)
+        return round(self.precio_con_ci(codigo_hijo) * med, 2)
 
     def presupuesto_total(self) -> float:
         """Importe total del presupuesto (importe del concepto raíz)."""
@@ -601,6 +782,8 @@ class Presupuesto:
         raiz = self.conceptos.get(self.codigo_raiz)
         if not raiz:
             return 0.0
+        # Suma de importes de los capítulos raíz. El CI ya está incorporado en
+        # el precio de cada partida (ver precio_con_ci / importe_en_padre).
         total = 0.0
         for hijo in raiz.hijos:
             total += self._importe_recursivo(hijo.codigo_hijo, self.codigo_raiz)
@@ -816,7 +999,7 @@ class Presupuesto:
     def add_recurso(
         self, codigo_partida: str, codigo_recurso: str,
         rendimiento: float = 1.0, precio: float = 0.0,
-        unidad: str = "", resumen: str = ""
+        unidad: str = "", resumen: str = "", tipo_fiebdc: str = "3"
     ) -> None:
         """Añade un recurso unitario a la descomposición de una partida.
 
@@ -824,10 +1007,17 @@ class Presupuesto:
         datos proporcionados.  Si ya existe como hijo de la partida, actualiza su
         rendimiento.  Si existe como concepto pero no está en la descomposición,
         lo enlaza.
+
+        tipo_fiebdc: subtipo del recurso (1 MO, 2 maquinaria, 3 material,
+        4 auxiliar). Se escribe explícito en el ~C al exportar para que Presto
+        no tenga que adivinar la naturaleza. Por defecto 3 (material), igual que
+        muestra la UI; el usuario puede cambiarlo en la columna "Tipo".
         """
         partida = self.conceptos.get(codigo_partida)
         if partida is None:
             raise ValueError(f"Partida '{codigo_partida}' no encontrada")
+        if tipo_fiebdc not in ("1", "2", "3", "4"):
+            tipo_fiebdc = "3"
         # Crear el recurso si no existe
         if not self.conceptos.get(codigo_recurso):
             nuevo = Concepto(
@@ -839,6 +1029,7 @@ class Presupuesto:
                 precio_es_dato=True,
             )
             nuevo._precio_bc3 = precio  # type: ignore[attr-defined]
+            nuevo._tipo_fiebdc = tipo_fiebdc  # type: ignore[attr-defined]
             self.add_concepto(nuevo)
         # Si ya está en la descomposición, sólo actualiza rendimiento
         for h in partida.hijos:
@@ -1012,6 +1203,8 @@ class Presupuesto:
         return False
 
     def _importe_recursivo(self, codigo: str, codigo_padre: str) -> float:
+        """Importe de un concepto. El CI ya va incluido en el precio de cada
+        partida (ver precio_con_ci), así que aquí solo se suma de abajo arriba."""
         concepto = self.conceptos.get(codigo)
         if concepto is None:
             return 0.0
@@ -1024,6 +1217,6 @@ class Presupuesto:
             for hijo in concepto.hijos:
                 total += self._importe_recursivo(hijo.codigo_hijo, codigo)
             return _redondea(total, self.dec_importe) if self.redondeo_activo else round(total, 2)
-        # Partida: precio × medición.
+        # Partida: precio (con CI) × medición.
         # Si la medición es 0 (o no hay medición), el importe es 0 — sin excepciones.
         return self.importe_en_padre(codigo, codigo_padre)

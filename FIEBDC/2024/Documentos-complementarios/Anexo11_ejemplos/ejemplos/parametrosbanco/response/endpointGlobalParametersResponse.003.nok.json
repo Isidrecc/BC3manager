@@ -1,0 +1,19 @@
+{
+  "status":  {
+    "returncode": 0,
+    "messages": []
+  },
+  "globalparameters": [
+      {
+        "name": "parametro global fecha",
+        "id_property": 344,
+        "type": "N",
+        "globalparametervalues": [{
+          "id_value": 37384386,
+          "cultures": false,
+          "stvalue": ["2012-04-23T18:25:43.511Z" ],
+          "dblvalue": null
+        }]
+      }
+	]
+}

@@ -1,0 +1,33 @@
+{
+  "status":  {
+    "returncode": 0,
+    "messages": []
+  },
+  "globalparameters": [
+      {
+        "name": "parámetro global booleano",
+        "id_property": 46498,
+        "type": "B",
+        "globalparametervalues": [{
+          "id_value": 37384385,
+          "cultures": false,
+          "stvalue": [],
+          "dblvalue": 0
+        }]
+      },
+	  {
+		  "name": "parámetro global multicultura",
+		  "id_property": -6,
+		  "type": "T",
+		  "globalparametervalues": [{
+		  	"id_value": 37384388,
+		    "cultures": true,
+		    "stvalue": [
+		      "interruptor autmático",
+		      "interruptor automàtic"
+		    ],
+		    "dblvalue": null
+		  }]
+	  }
+	]
+}

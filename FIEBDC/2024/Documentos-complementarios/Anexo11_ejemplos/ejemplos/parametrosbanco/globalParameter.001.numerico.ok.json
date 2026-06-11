@@ -1,0 +1,20 @@
+{
+  "name": "parametro numerico",
+  "id_property": -6,
+  "type": "N",
+  "globalparametervalues": [
+    {
+      "id_value": 1169172,
+      "cultures": false,
+      "stvalue": [],
+      "dblvalue": 100
+    },
+    {
+      "id_value": 1169173,
+      "cultures": false,
+      "stvalue": [],
+      "dblvalue": 200
+    }    
+  ]
+}
+

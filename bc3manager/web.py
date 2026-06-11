@@ -8,7 +8,7 @@ import os, sys, tempfile, webbrowser, json as _json
 from threading import Timer
 from typing import Optional
 from flask import Flask, render_template_string, request, jsonify, send_file, Response
-from bc3manager.core.model import Presupuesto, TipoConcepto, Hijo, Concepto
+from bc3manager.core.model import Presupuesto, TipoConcepto, Hijo, Concepto, _mult_red
 from bc3manager.io.lector import leer_bc3
 from bc3manager.io.escritor import escribir_bc3
 from bc3manager.reports.informes import generar_informe, INFORMES
@@ -41,12 +41,16 @@ def _arbol_json(p: Presupuesto) -> list[dict]:
                 rec = p.get(h.codigo_hijo)
                 if rec:
                     es_pct = Presupuesto.es_porcentaje(rec)
+                    # DecImp (subtotales del desglose): multiplicación en Decimal
+                    # exacto + redondeo mitad-arriba, igual que Presto. Con round()
+                    # de Python, 0,015×27,49 saldría 0,4123 en vez de 0,4124.
+                    dec_sub = p.dec_subtotal if p.redondeo_activo else 4
                     if es_pct:
                         # Importe = (acumulado de líneas previas) × coeficiente.
                         # El "precio" mostrado es el % (p.ej. 7), no el precio unitario.
-                        imp = round(acum * h.cantidad, 4)
+                        imp = _mult_red(acum, h.cantidad, dec_sub)
                     else:
-                        imp = round(rec.precio * h.cantidad, 4)
+                        imp = _mult_red(rec.precio, h.cantidad, dec_sub)
                     acum += imp
                     recursos.append({"codigo": rec.codigo, "unidad": rec.unidad, "resumen": rec.resumen,
                         "tipo_fiebdc": getattr(rec, "_tipo_fiebdc", "3"),
@@ -59,15 +63,38 @@ def _arbol_json(p: Presupuesto) -> list[dict]:
         med_obj = c.mediciones.get(codigo_padre)
         if med_obj:
             for ln in med_obj.lineas:
+                # Parcial con el redondeo de Presto (dimensiones a DD, etc.).
+                parcial = p.parcial_linea(ln)
                 lineas_med.append({"comentario": ln.comentario, "n_uds": ln.n_uds,
                     "longitud": ln.longitud, "anchura": ln.anchura, "altura": ln.altura,
-                    "subtotal": round(ln.subtotal, 3), "subtotal_fmt": _fmt(ln.subtotal, 3)})
+                    "subtotal": round(parcial, 3), "subtotal_fmt": _fmt(parcial, 2)})
+        # Precio mostrado: para partidas, el precio CON costes indirectos (como
+        # Presto, p.ej. 9,39 = 8,86 + 6%). Para capítulos/recursos, su precio.
+        precio_vista = p.precio_con_ci(codigo)
+        # Desglose del precio de partida (como el informe de Presto):
+        #   Suma la partida (CD) + Costes indirectos + Redondeo = TOTAL PARTIDA
+        desglose = None
+        if c.tipo == TipoConcepto.PARTIDA:
+            suma_cd = c.precio                       # coste directo (suma del desglose)
+            ci_imp = suma_cd * p.ci_pct              # importe del CI sobre el CD
+            total_part = precio_vista                # CD + CI redondeado (TOTAL PARTIDA)
+            redondeo = round(total_part - suma_cd - ci_imp, 4)
+            desglose = {
+                "suma_fmt": _fmt(suma_cd, 4),
+                "ci_pct": round(p.ci_pct * 100, 2),
+                "ci_importe_fmt": _fmt(ci_imp, 4),
+                "redondeo_fmt": _fmt(redondeo, 4),
+                "total_fmt": _fmt(total_part, 2),
+                "tiene_ci": bool(p.ci_pct),
+            }
         return {"codigo": c.codigo, "unidad": c.unidad, "resumen": c.resumen, "texto": c.texto,
             "tipo": c.tipo.value, "tipo_fiebdc": getattr(c, "_tipo_fiebdc", ""),
-            "precio": c.precio, "precio_fmt": _fmt(c.precio, 2),
+            "precio": precio_vista, "precio_fmt": _fmt(precio_vista, 2),
             "medicion": med_total, "medicion_fmt": _fmt(med_total, 2),
+            "medicion_total_fmt": _fmt(med_total, 3),
             "importe": importe, "importe_fmt": _fmt(importe, 2),
             "hijos": hijos_data, "recursos": recursos, "lineas_medicion": lineas_med,
+            "desglose_precio": desglose,
             "padre": codigo_padre}
     raiz = p.get(p.codigo_raiz)
     if not raiz: return []
@@ -89,6 +116,7 @@ def _info_json(p):
         "partidas": sum(1 for c in p.conceptos.values() if c.tipo == TipoConcepto.PARTIDA),
         "unitarios": sum(1 for c in p.conceptos.values() if c.tipo == TipoConcepto.UNITARIO),
         "total": p.presupuesto_total(), "total_fmt": _fmt(p.presupuesto_total()),
+        "ci_pct": round(p.ci_pct * 100, 2),
         "archivo_temporal": es_temporal}
 
 def _resp():
@@ -450,8 +478,9 @@ def _generar_excel_validacion(p, ruta_destino: str) -> str:
     ws = wb.create_sheet("Importes partidas")
     write_header(ws, [
         "Codigo", "En capitulo", "Descripcion", "Ud",
-        "Precio archivo", "Precio calc",
-        "Medicion",
+        "Precio archivo (CD)", "Precio calc (CD)",
+        "Precio +CI (Presto)",
+        "Medicion archivo (~M)", "Medicion calc (lineas)",
         "Importe archivo", "Importe calc",
         "Diferencia", "% dif",
     ])
@@ -459,7 +488,8 @@ def _generar_excel_validacion(p, ruta_destino: str) -> str:
         row = [
             d["codigo"], d["padre"], d["resumen"], d["unidad"],
             d["precio_archivo"], d["precio_calc"],
-            d["medicion"],
+            d["precio_calc_ci"],
+            d["medicion_archivo"], d["medicion_calc"],
             d["importe_archivo"], d["importe_calc"],
             d["diferencia"], d["diferencia_pct"],
         ]
@@ -467,20 +497,25 @@ def _generar_excel_validacion(p, ruta_destino: str) -> str:
             cell = ws.cell(row=i, column=j, value=v)
             cell.border = bord
             if isinstance(v, (int, float)):
-                cell.number_format = "#,##0.0000" if j <= 7 else "#,##0.00"
+                cell.number_format = "#,##0.0000" if j <= 9 else "#,##0.00"
                 cell.alignment = Alignment(horizontal="right")
-            if j == 10 and isinstance(v, (int, float)) and abs(v) >= 0.01:
+            # Resaltar diferencia de importe (col 12) y de medición (col 8 vs 9)
+            if j == 12 and isinstance(v, (int, float)) and abs(v) >= 0.01:
                 cell.fill = bad_fill
+        # Resaltar discrepancia de medición archivo vs calc
+        if abs(d["medicion_archivo"] - d["medicion_calc"]) >= 0.01:
+            ws.cell(row=i, column=8).fill = bad_fill
+            ws.cell(row=i, column=9).fill = bad_fill
     # Fila total al final
     if comp["partidas"]:
         fila_total = len(comp["partidas"]) + 2
         tot_arch = sum(d["importe_archivo"] for d in comp["partidas"])
         tot_calc = sum(d["importe_calc"] for d in comp["partidas"])
         ws.cell(row=fila_total, column=1, value="TOTAL").font = Font(bold=True)
-        ws.cell(row=fila_total, column=8, value=round(tot_arch, 2)).font = Font(bold=True)
-        ws.cell(row=fila_total, column=9, value=round(tot_calc, 2)).font = Font(bold=True)
-        ws.cell(row=fila_total, column=10, value=round(tot_calc - tot_arch, 2)).font = Font(bold=True)
-        for j in (8, 9, 10):
+        ws.cell(row=fila_total, column=10, value=round(tot_arch, 2)).font = Font(bold=True)
+        ws.cell(row=fila_total, column=11, value=round(tot_calc, 2)).font = Font(bold=True)
+        ws.cell(row=fila_total, column=12, value=round(tot_calc - tot_arch, 2)).font = Font(bold=True)
+        for j in (10, 11, 12):
             c = ws.cell(row=fila_total, column=j)
             c.number_format = "#,##0.00"
             c.alignment = Alignment(horizontal="right")
@@ -702,7 +737,8 @@ def api_editar():
             p.add_recurso(d["codigo_partida"], d["codigo_recurso"],
                           float(d.get("rendimiento", 1)),
                           float(d.get("precio", 0)),
-                          d.get("unidad", ""), d.get("resumen", ""))
+                          d.get("unidad", ""), d.get("resumen", ""),
+                          d.get("tipo_fiebdc", "3"))
         elif accion == "eliminar_recurso":
             p.eliminar_recurso(d["codigo_partida"], d["codigo_recurso"])
         elif accion == "reordenar_recurso":
@@ -894,6 +930,17 @@ button{cursor:pointer;font-family:inherit}
 .tab-add-row:hover{color:var(--accent)}
 .tab-del-row{display:inline-flex;align-items:center;gap:6px;color:var(--text-muted);font-size:12px;cursor:pointer;padding:4px 2px;border-radius:var(--radius);transition:color .1s}
 .tab-del-row:hover{color:var(--red)}
+/* Desglose de precio de partida (estilo informe Presto) */
+.desglose-precio{margin-top:10px;margin-left:auto;width:max-content;min-width:280px;font-size:13px}
+.dp-row{display:flex;justify-content:space-between;gap:24px;padding:3px 10px;border-bottom:1px dotted var(--border-light)}
+.dp-lbl{color:var(--text-dim)}
+.dp-val{font-variant-numeric:tabular-nums;color:var(--text)}
+.dp-pct{color:var(--text-muted);font-size:11px}
+.dp-row.dp-total{border-bottom:none;border-top:2px solid var(--border);margin-top:2px;padding-top:6px}
+.dp-row.dp-total .dp-lbl{font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.5px;font-size:12px}
+.dp-row.dp-total .dp-val{font-weight:700;color:var(--green);font-size:15px}
+.medicion-total{display:flex;justify-content:space-between;gap:24px;margin-top:8px;padding:6px 10px;border-top:2px solid var(--border);font-size:13px;font-weight:600;width:max-content;min-width:220px;margin-left:auto}
+.medicion-total .dp-val{font-variant-numeric:tabular-nums;color:var(--accent)}
 </style></head><body>
 <header class="header">
 <div class="logo">BC3<span>Manager</span></div><div class="sep"></div><span id="fileName" style="font-size:12px;color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
@@ -1140,6 +1187,11 @@ async function calcSave(params,preloaded){
         const meds=(nNew.lineas_medicion||[]).map((ln,i)=>({...ln,_idx:i}));
         try{_tabMedic.replaceData(meds);}catch(e){console.error('replaceData medic:',e);}
       }
+      // Refrescar el desglose de precio y el total de medición (no son tablas).
+      const dp=document.querySelector('.desglose-precio');
+      if(dp)dp.outerHTML=_renderDesglosePrecio(nNew);
+      const mt=document.querySelector('.medicion-total');
+      if(mt)mt.outerHTML=_renderTotalMedicion(nNew);
     }
   }
   return j;
@@ -1166,6 +1218,28 @@ function _renderHeaderPrecio(nodo,cod){
   return (nodo.recursos&&nodo.recursos.length>0)
     ? `<span class="ecell" contenteditable="false" style="cursor:default;opacity:.7" title="Calculado desde la descomposición">${esc(nodo.precio_fmt)}</span> € <span style="font-size:11px;color:var(--text-muted)">🔒</span>`
     : `${ec(nodo.precio_fmt,true,v=>api({accion:'precio',codigo:cod,valor:parseNum(v)}).then(refresh),true)} €`;
+}
+// Desglose del precio de la partida, estilo informe de Presto:
+//   Suma la partida (CD) · Costes indirectos % · Redondeo · TOTAL PARTIDA
+function _renderDesglosePrecio(nodo){
+  const d=nodo&&nodo.desglose_precio;
+  if(!d)return '';
+  const fila=(lbl,val,extra='')=>`<div class="dp-row${extra}"><span class="dp-lbl">${lbl}</span><span class="dp-val">${esc(val)}</span></div>`;
+  let html='<div class="desglose-precio">';
+  html+=fila('Suma la partida', d.suma_fmt+' €');
+  if(d.tiene_ci){
+    html+=fila('Costes indirectos &nbsp;<span class="dp-pct">'+esc(_fmtEur(d.ci_pct))+' %</span>', d.ci_importe_fmt+' €');
+    html+=fila('Redondeo', d.redondeo_fmt+' €');
+  }
+  html+=fila('TOTAL PARTIDA', d.total_fmt+' €',' dp-total');
+  html+='</div>';
+  return html;
+}
+// Total de las líneas de medición al pie del recuadro de mediciones.
+function _renderTotalMedicion(nodo){
+  if(!nodo||!nodo.lineas_medicion||!nodo.lineas_medicion.length)return '';
+  return `<div class="medicion-total"><span class="dp-lbl">Total medición</span>`
+    +`<span class="dp-val">${esc(nodo.medicion_total_fmt||nodo.medicion_fmt||'0')} ${esc(nodo.unidad||'')}</span></div>`;
 }
 // Actualiza las cabeceras numéricas del panel de detalle sin re-renderizar todo el panel.
 // IMPORTANTE: re-renderiza el contenido interno (no solo el text), para que la estructura
@@ -1204,7 +1278,7 @@ function _initTabDescomp(nodo,cod){
     api({accion:'add_recurso',codigo_partida:cod,codigo_recurso:d.codigo.trim(),
       rendimiento:parseNum(String(d.rendimiento||1))||1,
       precio:parseNum(String(d.precio||0))||0,
-      unidad:d.unidad||'',resumen:d.resumen||''}).then(j=>{
+      unidad:d.unidad||'',resumen:d.resumen||'',tipo_fiebdc:d.tipo_fiebdc||'3'}).then(j=>{
       if(!j){row.update({_isNew:true});return;}
       calcSave(null,j);
     });
@@ -1496,7 +1570,8 @@ function renderStats(){
     <div class="stat"><span class="stat-label">Programa</span><span class="stat-value">${esc(i.programa)}</span></div>
     <div class="stat"><span class="stat-label">Capítulos</span><span class="stat-value">${i.capitulos}</span></div>
     <div class="stat"><span class="stat-label">Partidas</span><span class="stat-value">${i.partidas}</span></div>
-    <div class="stat"><span class="stat-label">PEM</span><span class="stat-value total">${esc(i.total_fmt)} €</span></div>`;
+    <div class="stat"><span class="stat-label">PEM</span><span class="stat-value total">${esc(i.total_fmt)} €</span></div>
+    ${i.ci_pct?`<div class="stat" title="Costes indirectos aplicados al PEM"><span class="stat-label">Costes indir.</span><span class="stat-value" style="color:var(--accent)">${esc(_fmtEur(i.ci_pct))} %</span></div>`:''}`;
   // Banner si el archivo está en carpeta temporal
   const tb=document.getElementById('tempBanner');
   if(i.archivo_temporal){
@@ -2062,6 +2137,7 @@ function renderDetail(nodo){
       <span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:6px">Clic = seleccionar (Shift = rango) · Doble clic = editar · Ctrl+C copia · Supr borra</span>
     </h3>
     <div id="tab-descomp"></div>
+    ${_renderDesglosePrecio(nodo)}
     <div class="tab-actions">
       <span class="tab-add-row" onclick="
         if(!_tabDescomp)return;
@@ -2080,6 +2156,7 @@ function renderDetail(nodo){
       <span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:6px">Clic = seleccionar (Shift = rango) · Doble clic = editar · Ctrl+V pega desde Excel · Supr borra</span>
     </h3>
     <div id="tab-medic" data-medid="${esc(medId)}"></div>
+    ${_renderTotalMedicion(nodo)}
     <div class="tab-actions">
       <span class="tab-add-row" onclick="
         if(!_tabMedic)return;
@@ -2452,8 +2529,10 @@ def main():
         else:
             print(f"  Aviso: no se encuentra '{ruta}'")
 
-    Timer(1.2, lambda: webbrowser.open(f"http://localhost:{port}")).start()
-    print(f"\n  BC3Manager web -> http://localhost:{port}")
+    # Abrimos por 127.0.0.1 (no 'localhost'): en algunos equipos 'localhost' se
+    # resuelve por un proxy/host alternativo y devuelve 403. La IP es directa.
+    Timer(1.2, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
+    print(f"\n  BC3Manager web -> http://127.0.0.1:{port}")
     print("  Los cambios se guardan automaticamente al archivo.")
     print("  Pulsa Ctrl+C para cerrar\n")
     app.run(host="127.0.0.1", port=port, debug=False)

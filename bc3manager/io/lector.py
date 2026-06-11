@@ -110,6 +110,7 @@ class LectorBC3:
         self._resolver_alias_hash()
         self.presupuesto.clasificar_tipos()
         self._detectar_raiz()
+        self._detectar_costes_indirectos()
         self.presupuesto.recalcular()
         return self.presupuesto
 
@@ -193,12 +194,56 @@ class LectorBC3:
         # El importe (precio × medición) usa, por convención de Presto, el mismo
         # nº de decimales que el precio de capítulo (Dec) para el rollup.
         p.dec_importe = p.dec_precio_capitulo
+        # Campo 2 (índice 2): coeficientes económicos CI\GG\BI\BAJA\IVA, en
+        # porcentaje (FIEBDC-2016 §REGISTRO TIPO COEFICIENTES). El CI es el único
+        # que afecta al PEM (precio de partida = CD + CI). Se guardan en t.p.uno.
+        campo_coef = campos[2] if len(campos) > 2 else ""
+        if campo_coef:
+            coefs = campo_coef.split("\\")
+            def _pct(i: int) -> float:
+                try:
+                    v = coefs[i].strip().replace(",", ".")
+                    return float(v) / 100.0 if v else 0.0
+                except (IndexError, ValueError):
+                    return 0.0
+            p.ci_pct   = _pct(0)   # CI
+            p.gg_pct   = _pct(1)   # GG
+            p.bi_pct   = _pct(2)   # BI
+            p.baja_pct = _pct(3)   # BAJA
+            p.iva_pct  = _pct(4)   # IVA
         # Moneda: primer subcampo no numérico del campo DECIMALES (p.ej. 'EUR').
         for tok in partes:
             t = tok.strip()
             if t and not t.isdigit():
                 p.moneda = t
                 break
+
+        # Campo 3 (índice 3): el formato COMPLETO y PREFERENTE según FIEBDC-2016
+        # ("los programas deben leer el campo 3 por ser más completo y en su
+        # defecto el campo 1"). Estructura (con dos huecos vacíos en el patrón):
+        #   DRC \ DC \ \ DFS \ DRS \ \ DUO \ DI \ DES \ DN \ DD \ DS \ DSP \ DEC \ DIVISA
+        # Índices:  0    1  2   3     4   5   6     7    8    9   10   11   12    13    14
+        # Aquí están TODOS los decimales de medición (DN, DD, DS, DSP) que el
+        # campo 1 no trae. Si existe, sobrescribe lo leído del campo 1.
+        campo3 = campos[3] if len(campos) > 3 else ""
+        if campo3:
+            f3 = campo3.split("\\")
+            def _d3(i: int, defecto: int) -> int:
+                try:
+                    v = f3[i].strip()
+                    return int(v) if v.isdigit() else defecto
+                except (IndexError, ValueError):
+                    return defecto
+            p.dec_cantrend        = _d3(4,  p.dec_cantrend)        # DRS: rendimientos
+            p.dec_precio_partida  = _d3(6,  p.dec_precio_partida)  # DUO: coste total UO
+            p.dec_subtotal        = _d3(7,  p.dec_subtotal)        # DI: rend×precio, ΣCD, CI
+            p.dec_natural         = _d3(8,  p.dec_natural)         # DES: elementos simples
+            p.dec_num             = _d3(9,  p.dec_num)             # DN: nº partes iguales
+            p.dec_dim             = _d3(10, p.dec_dim)             # DD: dimensiones medición
+            p.dec_cantmed         = _d3(11, p.dec_cantmed)         # DS: total mediciones
+            p.dec_parcial         = _d3(12, p.dec_parcial)         # DSP: parcial mediciones
+            p.dec_precio_capitulo = _d3(1,  p.dec_precio_capitulo) # DC: importe capítulos/líneas
+            p.dec_importe         = p.dec_precio_capitulo          # medición × precio (DC)
         return
 
     # ---- ~C Concepto ----------------------------------------------------
@@ -411,6 +456,47 @@ class LectorBC3:
             )
             if vacio and not referenciado:
                 del self.presupuesto.conceptos[cod]
+
+        # Normalizar las claves de medición (código del padre). Presto 20 emite
+        # los ~M referenciando al capítulo padre SIN el # final (ej: '001'),
+        # aunque el ~C del capítulo lo lleve ('001#'). Si la clave sin # ya no
+        # corresponde a ningún concepto (su fantasma se borró arriba) pero su
+        # gemelo con # sí existe, se renombra para que medicion_total() la
+        # encuentre al recorrer el árbol. Sin esto, todas las mediciones quedan
+        # "huérfanas" y el PEM sale a 0. Debe ir DESPUÉS de borrar fantasmas.
+        for concepto in self.presupuesto.conceptos.values():
+            if not concepto.mediciones:
+                continue
+            for padre in list(concepto.mediciones.keys()):
+                if padre.endswith('#') or padre == "__sin_padre__":
+                    continue
+                padre_hash = padre + '#'
+                if (self.presupuesto.get(padre) is None
+                        and self.presupuesto.get(padre_hash) is not None):
+                    concepto.mediciones[padre_hash] = concepto.mediciones.pop(padre)
+
+    # ---- Detección de costes indirectos ---------------------------------
+
+    def _detectar_costes_indirectos(self) -> None:
+        """
+        Fallback para detectar el % de costes indirectos (CI) cuando el registro
+        ~K no lo declaró en su campo 2 (CI\\GG\\BI\\BAJA\\IVA).
+
+        La vía robusta y conforme al estándar FIEBDC es leer el CI del ~K (lo
+        hace `_reg_K`). Pero algunos exportadores no rellenan ese campo y, en su
+        lugar, declaran el CI mediante un concepto de tipo porcentaje cuyo código
+        empieza por '%CI' (p.ej. '%CI000010500') con su precio = porcentaje. Solo
+        en ese caso —y si el ~K no trajo CI— lo tomamos de ahí.
+
+        Si no hay ninguna de las dos cosas, ci_pct queda en 0 y el cálculo no
+        cambia (caso Presto 8.8, que ya incorpora los indirectos en los precios).
+        """
+        if self.presupuesto.ci_pct:
+            return  # ya leído del registro ~K (vía conforme al estándar)
+        for cod, c in self.presupuesto.conceptos.items():
+            if cod.startswith("%CI") and c.precio:
+                self.presupuesto.ci_pct = c.precio / 100.0
+                return
 
     # ---- Detección de la obra raíz --------------------------------------
 

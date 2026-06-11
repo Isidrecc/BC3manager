@@ -184,12 +184,16 @@ class EscritorBC3:
     def _reg_K(self) -> str:
         """Escribe el registro ~K con los decimales de redondeo y la moneda.
 
-        Orden FIEBDC del campo DECIMALES (verificado empíricamente):
+        Orden FIEBDC del campo DECIMALES (campo 1, verificado empíricamente):
           DecDet \\ DecCantMed \\ DecCantRend \\ DecImp \\ DecNat \\ DecPar \\ Dec \\ MONEDA \\
 
+        Campo 2 = coeficientes económicos CI \\ GG \\ BI \\ BAJA \\ IVA (en %),
+        que deben conservarse para que el CI (y los demás) sobrevivan al
+        round-trip; si no, al reabrir se perdería el cálculo de indirectos.
+
         Así, al reabrir el archivo (en BC3Manager o en otro programa) se
-        recupera exactamente la misma configuración de redondeo, y los precios
-        se recalculan igual que en el programa de origen.
+        recupera exactamente la misma configuración de redondeo y de
+        coeficientes, y los precios se recalculan igual que en el origen.
         """
         p = self.p
         decimales = (
@@ -197,14 +201,45 @@ class EscritorBC3:
             f"{p.dec_subtotal}\\{p.dec_natural}\\{p.dec_precio_partida}\\"
             f"{p.dec_precio_capitulo}\\{p.moneda or 'EUR'}\\"
         )
-        return f"~K|{decimales}|0|"
+        def _pct(v: float) -> str:
+            # t.p.uno → porcentaje, sin ceros decimales innecesarios (6.0 → "6")
+            s = f"{v * 100:.4f}".rstrip("0").rstrip(".")
+            return s if s else "0"
+        coefs = (p.ci_pct, p.gg_pct, p.bi_pct, p.baja_pct, p.iva_pct)
+        if any(coefs):
+            campo_coef = "\\".join(_pct(v) for v in coefs)
+        else:
+            campo_coef = "0"   # sin coeficientes (p.ej. Presto 8.8)
+        return f"~K|{decimales}|{campo_coef}|"
+
+    def _tipo_fiebdc_salida(self, c: Concepto) -> str:
+        """Tipo FIEBDC (6º campo del ~C), según la norma FIEBDC-3.
+
+        El estándar SÓLO clasifica la naturaleza de los RECURSOS:
+            0 = Sin clasificar
+            1 = Mano de obra
+            2 = Maquinaria y medios auxiliares
+            3 = Materiales
+        (los valores superiores son subclasificaciones de recurso del BOE/CNC).
+
+        No existe ningún código para 'capítulo' ni 'partida': son 0 (sin
+        clasificar) y su naturaleza se deduce de su POSICIÓN en la estructura
+        (registros ~D y ~M), no de este campo. Por eso aquí:
+          - se conserva el tipo del recurso si es 1/2/3/4,
+          - todo lo demás (obra, capítulos, partidas, % de medios auxiliares)
+            se escribe como 0 (sin clasificar), igual que hace Presto.
+        Intentar marcar la partida con un código no estándar (p.ej. 6) no sirve:
+        los programas lo ignoran y deducen la naturaleza por la estructura.
+        """
+        tf = getattr(c, "_tipo_fiebdc", "") or ""
+        return tf if tf in {"1", "2", "3", "4"} else "0"
 
     def _reg_C(self, c: Concepto) -> str:
         # Precio con 6 decimales (suficiente para DecPar/DecNat hasta 6) y sin
         # ceros sobrantes — no truncar precios como 11.00965 (DecPar=5).
-        # 6º campo: tipo FIEBDC (_tipo_fiebdc) para que otros programas
-        # clasifiquen igual los conceptos (MO/MQ/MT/capítulo/partida).
-        tipo = getattr(c, "_tipo_fiebdc", "") or ""
+        # 6º campo: tipo FIEBDC (0 sin clasif. / 1 MO / 2 maq. / 3 mat.), según
+        # norma. Capítulos y partidas son 0; su naturaleza es posicional.
+        tipo = self._tipo_fiebdc_salida(c)
         fecha = getattr(c, "_fecha_bc3", "") or ""
         return f"~C|{c.codigo}|{c.unidad}|{_escape(c.resumen)}|{_fmt(c.precio, 6)}|{fecha}|{tipo}|"
 

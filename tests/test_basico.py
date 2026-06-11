@@ -249,6 +249,34 @@ def test_round_trip():
         os.unlink(ruta)
 
 
+def test_recurso_nuevo_tipo_fiebdc():
+    """Un recurso añadido a una partida debe exportarse con tipo FIEBDC
+    explícito (no vacío), para que Presto no adivine su naturaleza. Por defecto
+    material (3); si se indica otro subtipo, se respeta."""
+    p = leer_bc3(EJEMPLO)
+    cap = next(c.codigo for c in p.conceptos.values()
+               if c.tipo.name == "PARTIDA")
+    p.add_recurso(cap, "NUEVO.MAT", rendimiento=2.0, precio=5.0, unidad="kg")
+    p.add_recurso(cap, "NUEVO.MAQ", rendimiento=1.0, precio=9.0,
+                  unidad="h", tipo_fiebdc="2")
+    assert getattr(p.get("NUEVO.MAT"), "_tipo_fiebdc", "") == "3"
+    assert getattr(p.get("NUEVO.MAQ"), "_tipo_fiebdc", "") == "2"
+
+    with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
+        salida = tmp.name
+    try:
+        escribir_bc3(p, salida)
+        with open(salida, "rb") as f:
+            lineas = f.read().decode("cp1252", errors="replace").splitlines()
+    finally:
+        os.unlink(salida)
+    tipo = lambda cod: next(
+        l for l in lineas if l.startswith(f"~C|{cod}|")
+    ).split("|")[6]
+    assert tipo("NUEVO.MAT") == "3"
+    assert tipo("NUEVO.MAQ") == "2"
+
+
 def test_export_estructura_presto():
     """El BC3 exportado debe imitar la estructura de Presto para que NO
     reclasifique las partidas al reabrir (bug: partidas de movimiento de tierras
@@ -282,6 +310,123 @@ def test_export_estructura_presto():
     m_mov = next(ln for ln in lineas if ln.startswith("~M|01#\\MOV.02.01|"))
     posicion = m_mov.split("|")[2]
     assert posicion.strip("\\").strip() != "", f"~M sin posición: {m_mov}"
+
+    # 3) Tipo FIEBDC según norma: el campo TIPO solo clasifica RECURSOS
+    #    (1 MO, 2 maquinaria, 3 material). Capítulos y partidas son 0 (sin
+    #    clasificar): el estándar no define código de partida/capítulo, su
+    #    naturaleza es posicional.
+    def tipo_de(codigo):
+        ln = next(l for l in lineas if l.startswith(f"~C|{codigo}|"))
+        return ln.split("|")[6]   # 6º campo del ~C
+    assert tipo_de("MAQ.RET.10") == "2"   # maquinaria
+    assert tipo_de("MO.006") == "1"       # mano de obra
+    assert tipo_de("MT.GAV") == "3"       # material
+    assert tipo_de("MOV.02.01") == "0"    # partida -> sin clasificar (estándar)
+    assert tipo_de("01#") == "0"          # capítulo -> sin clasificar
+    assert tipo_de("SF##") == "0"         # obra raíz -> sin clasificar
+
+
+# ---------------------------------------------------------------------------
+# Regresión: costes indirectos (CI) y redondeos FIEBDC-2016 (archivo Presto 20)
+#
+# Estos tests BLINDAN el comportamiento descubierto trabajando con
+# Test_Alqueria.bc3 (FIEBDC-3/2016, Presto 20). NO los relajes sin entender:
+#   - El CI y los decimales se leen del registro ~K (campo 2 coeficientes,
+#     campo 3 decimales — el preferente según la norma, campo 1 de respaldo).
+#   - El CI se aplica POR PARTIDA: precio = round(CD × (1+CI)) a DecPar. Se
+#     aplica a TODAS las partidas, incluidas las que ya llevan una línea %CI /
+#     medios auxiliares en su desglose (esa línea es un coste más del CD, NO el
+#     CI global; Presto suma el 6% igual encima).
+#   - Las líneas de medición redondean CADA factor antes de multiplicar
+#     (dimensiones a DD, nº de partes a DN); sin esto, alturas como 0,0475 se
+#     usaban en crudo en vez de 0,05.
+#   - Multiplicaciones en Decimal exacto + redondeo mitad-arriba (no float/round).
+# Valores verificados contra el informe de desglose de Presto.
+# ---------------------------------------------------------------------------
+ALQUERIA = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "Test_Alqueria.bc3"
+)
+
+
+def test_alqueria_coeficientes_del_registro_K():
+    """CI/GG/BI/IVA se leen del campo 2 del ~K (no de un concepto %CI)."""
+    if not os.path.exists(ALQUERIA):
+        return
+    p = leer_bc3(ALQUERIA)
+    assert abs(p.ci_pct - 0.06) < 1e-9   # 6% costes indirectos
+    assert abs(p.gg_pct - 0.13) < 1e-9   # 13% gastos generales
+    assert abs(p.bi_pct - 0.06) < 1e-9   # 6% beneficio industrial
+    assert abs(p.iva_pct - 0.21) < 1e-9  # 21% IVA
+
+
+def test_alqueria_decimales_del_campo3_K():
+    """Los decimales de medición salen del campo 3 del ~K (el completo):
+    DD=2 (dimensiones), DN=2 (nº partes), DS=3 (total), DSP=2 (parcial)."""
+    if not os.path.exists(ALQUERIA):
+        return
+    p = leer_bc3(ALQUERIA)
+    assert p.dec_dim == 2 and p.dec_num == 2
+    assert p.dec_cantmed == 3 and p.dec_parcial == 2
+
+
+def test_alqueria_ci_por_partida():
+    """El precio de partida incluye el CI: round(CD × 1,06). Se aplica a TODAS,
+    incluso a las que llevan línea %CI explícita en su desglose."""
+    if not os.path.exists(ALQUERIA):
+        return
+    p = leer_bc3(ALQUERIA)
+    # 301.0010: CD 8,86 -> 9,39 (sin %CI explícito)
+    assert abs(p.precio_con_ci("301.0010") - 9.39) < 1e-6
+    # 700.001a: CD 32,33 (ya con línea %CI dentro) -> 34,27 (CI igual encima)
+    assert abs(p.precio_con_ci("700.001a") - 34.27) < 1e-6
+    # 301.0115: CD 8,06 -> 8,54
+    assert abs(p.precio_con_ci("301.0115") - 8.54) < 1e-6
+
+
+def test_alqueria_redondeo_dimensiones_medicion():
+    """Cada dimensión se redondea a DD antes de multiplicar: la altura 0,0475
+    de 215.0030 se usa como 0,05, dando medición total 112,21 (no 111,32)."""
+    if not os.path.exists(ALQUERIA):
+        return
+    p = leer_bc3(ALQUERIA)
+    assert abs(p.medicion_total("215.0030", "003#") - 112.21) < 1e-6
+
+
+def test_alqueria_partida_alzada_sin_lineas():
+    """Partida con ~M sin líneas de detalle: la medición es el total declarado
+    (=1), no 0. 542.0600 (abonament fixe) -> medición 1, importe 7964,67."""
+    if not os.path.exists(ALQUERIA):
+        return
+    p = leer_bc3(ALQUERIA)
+    assert abs(p.medicion_total("542.0600", "003#") - 1.0) < 1e-6
+    assert abs(p.importe_en_padre("542.0600", "003#") - 7964.67) < 0.01
+
+
+def test_alqueria_sin_discrepancias_y_pem():
+    """Con todo bien leído del ~K, no debe haber discrepancias de precio ni de
+    medición, y el PEM debe quedar a < 0,05% del valor congelado del archivo."""
+    if not os.path.exists(ALQUERIA):
+        return
+    p = leer_bc3(ALQUERIA)
+    r = p.validar_completo()
+    assert len(r["precios"]) == 0, f"precios inconsistentes: {r['precios'][:3]}"
+    assert len(r["mediciones"]) == 0, f"mediciones inconsistentes: {r['mediciones'][:3]}"
+    pem = p.presupuesto_total()
+    arch = p.get(p.codigo_raiz)._precio_bc3
+    assert abs(pem - arch) / arch < 0.0005, f"PEM {pem:,.2f} vs archivo {arch:,.2f}"
+
+
+def test_presto88_sin_ci_sigue_exacto():
+    """Un archivo sin CI en el ~K (Presto 8.8) NO debe aplicar ningún recargo:
+    ci_pct=0 y el PEM cuadra exacto. Protege contra aplicar CI donde no toca."""
+    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Test_SONFONT.bc3")
+    if not os.path.exists(ruta):
+        return
+    p = leer_bc3(ruta)
+    assert p.ci_pct == 0.0
+    arch = p.get(p.codigo_raiz)._precio_bc3
+    if arch:
+        assert abs(p.presupuesto_total() - arch) < 0.01
 
 
 if __name__ == "__main__":

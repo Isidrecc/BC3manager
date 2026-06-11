@@ -1,0 +1,19 @@
+{
+  "name": "parametro texto",
+  "id_property": -6,
+  "type": "T",
+  "globalparametervalues": [
+    {
+      "id_value": 1169172,
+      "cultures": false,
+      "stvalue": [ "opción I" ],
+      "dblvalue": null
+    },
+    {
+      "id_value": 1169173,
+      "cultures": false,
+      "stvalue": [ "opción II" ],
+      "dblvalue": null
+    }
+  ]
+}

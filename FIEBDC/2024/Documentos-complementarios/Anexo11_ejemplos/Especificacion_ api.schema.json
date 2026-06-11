@@ -1,0 +1,959 @@
+{
+  "$schema": "https://json-schema.org/draft/2019-09/schema",
+  "$id": "http://api.fiebdc.es/epecificacion_api_edicion_a.schema.json",
+  "title": "Espeficicació del api fiebdc",
+  "description": "Valida la especificación detallada en la edición A del document Especificacion_api.odt.",
+
+  "definitions": {
+
+   "enumType": {
+      "description": "Tipos de datos:  B - BOOLEANO,  D - FECHA,  N - NUMERICO, T - TEXTO",
+      "type": "string",
+      "enum": [ "B", "D", "N", "T" ]
+    },
+
+    "enumPayLoadFormat": {
+      "description": "Formato en que se representa la información de los elementos solicitados. Actualment solo bc3 es sportado.",
+      "type": "string",
+      "enum": [ "bc3" ]
+    },
+
+    "enumCompressionAlgorithm": {
+      "description": "Algoritmos de compressión soportados",
+      "type": "string",
+      "enum": [ "zip", "tar" ]
+    },
+
+    "enumCulture": {
+      "description": "codificación utilitzada para identificar una cultura, se contempla: es-ES (Castellano), ca-ES (Catalán), eu-ES (Euskera), gl-ES (Gallego), en-US (Ingles).",
+      "type": "string",
+      "enum": [ "ca-ES", "es-ES", "eu-ES", "gl-ES", "en-US" ]
+    },
+
+    "enumCultureIndex": {
+      "description": "Representa las posiciones validas dentro de un array de valores multicultura.",
+      "type": "integer",
+      "enum": [ 0, 1, 2, 3, 4 ]
+    },
+
+    "enumAsyncStatus": {
+      "description": "Posibles estdos en los que se puede encontrar una tarea asíncrona.",
+      "type": "string",
+      "enum": [ "waiting", "starting", "finished" ]
+    },
+
+    "culture": {
+
+      "title": "Información sobre un idioma i zona geografica.",
+      "description": "La cultura representa mas informació que un idioma, actualmente solo se utiliza para el idioma.",
+      "type": "object",
+      "properties": {
+        "culture": {
+          "$ref": "#/definitions/enumCulture"
+        },
+        "index": {
+          "description": "posición dentro de un array de valores donde se encuentra el texto correspondiente a esta cultura.",
+          "$ref": "#/definitions/enumCultureIndex"
+        }
+      },
+      "additionalProperties": false,
+      "required": [ "culture", "index" ]
+
+    },
+    
+    "baseValue":{
+
+      "title": "Representación de un valor",
+      "description": "El valor puede ser nuérico, booleano, texto, texto mulicultura y fecha.",
+      "type": "object",
+      "properties": {
+        "cultures": {
+          "description": "true indica que valor varia según la cultura. false indica que el valor es siempre el mismo para todas la culturas.",
+          "type": "boolean"
+        },
+        "stvalue": {
+          "description": "Array que contiene el mismo texto en diferents idiomas, la posición en l′array determina el idoma, ejemplo: 0- catalán, 1-castellano, 2-ingles. Las posiciones no son fijas, vienen definidas en el objeto banco. En cas que el atributo cultures sea false, entonces el array stvalue solo tiene un element.",
+          "type": "array",
+          "items": { 
+            "anyOf": [
+              {"type": "string"},
+              {"type": "null"}
+            ]
+          },
+          "minItems": 0,
+          "uniqueItems": false
+        },
+        "dblvalue": {
+          "description": "Contiene el valor en caso que sea numérico.",
+          "anyOf": [
+            {"type": "number"},
+            {"type": "integer"},
+            {"type": "null"}
+          ]
+        },
+      },
+
+      "additionalProperties": false,
+      "required": [ "cultures", "stvalue", "dblvalue" ]
+    },
+
+
+    "value": {
+      "description": "Cualquiera de los tipos validos: numérico, text, fecha,...",
+      "anyOf": [
+        { "$ref": "#/definitions/numericalValue" },
+        { "$ref": "#/definitions/booleanValue" },
+        { "$ref": "#/definitions/dateValue" },
+        { "$ref": "#/definitions/integerValue" },
+        { "$ref": "#/definitions/multicultureValue" },
+        { "$ref": "#/definitions/textValue" },
+        { "$ref": "#/definitions/isNullValue" },
+        { "$ref": "#/definitions/singleTextValue" },
+        { "$ref": "#/definitions/textValueNotNull" }
+      ]
+    },
+
+    "numericalValue": {
+      "description": "representación que ha de tener un valor numérico.",
+      "allOf": [
+        { "$ref": "#/definitions/baseValue" },
+        {
+          "properties": {
+            "cultures": { "enum": [false ] },
+            "stvalue": {
+              "items": [],
+              "minItems": 0,
+              "maxItems": 0
+            }
+          }
+        }
+      ]
+    },
+
+    "booleanValue": {
+      "description": "representación que ha de tener un valor booleano. 0-false 1-true",
+      "allOf": [
+        { "$ref": "#/definitions/numericalValue" },
+        {
+          "properties": {
+            "dblvalue": { "enum": [ 0, 1] }
+          }
+        }
+      ]
+    },
+
+    "dateValue": {
+      "description": "Valor que representa una fecha expresada según ISO 8601. Ex: 2012-04-23T18:25:43.511Z",
+      "allOf": [
+        { "$ref": "#/definitions/baseValue" },
+        {
+          "properties": {
+            "cultures": { "enum": [ false ] },
+            "stvalue": { 
+              "anyOf":[
+                  {   "items":{
+                          "format": "date",
+                          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" 
+                      }
+                  },
+                  {   "items":{
+                          "format": "date-time",
+                          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{1,3}Z$"
+                    }
+                  }, 
+                  {   "items":{
+                          "format": "date-time",
+                          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+                    }
+                  }
+              ],
+              "minItems": 1,
+              "maxItems": 1
+            },
+            "dblvalue": { "type": "null" }
+          }
+        }
+      ]
+    },
+
+    "integerValue": {
+      "description": "representación que ha de tener un valor de tipo entero.",
+      "allOf": [
+        { "$ref": "#/definitions/numericalValue" },
+        {
+          "properties": {
+            "dblvalue": {
+              "anyOf": [
+                {"type": "integer"},
+                {"type": "null"}
+              ]
+            }
+          }
+        }
+      ]
+    },
+
+    "multicultureValue":{
+      "description": "Un valor expresado con multiples culturass ha de tener cultures a true, ha de tener como  minímo un texto en stvalue y dblvalue ha de ser null.",
+      "allOf": [
+        { "$ref": "#/definitions/baseValue" },
+        {
+          "properties": {
+            "cultures": { "enum": [ true ] },
+            "stvalue": { 
+              "items": [],
+              "minItems": 1
+            },
+            "dblvalue": { "type": "null" }
+          }
+        }
+      ]
+    },
+
+    "textValue": {
+      "description": "el valor peuede ser multicultura o no, admite la representación de un texto null y no pot ser numérico.",
+      "allOf": [
+        { "$ref": "#/definitions/baseValue" },
+        {
+          "properties": {
+            "dblvalue": { "type": "null" }
+          }
+        }
+      ]
+    },
+
+    "isNullValue": {
+      "description": "Representa un null, es decir, quan dblvalue es null y el array stvalue tiene cero elementos.",
+      "allOf": [
+        { "$ref": "#/definitions/baseValue" },
+        {
+          "properties": {
+            "stvalue": {
+              "items": [],
+              "maxItems": 0
+            },
+            "dblvalue": { "type": "null" }
+          }
+        }
+      ]
+    },
+
+    "singleTextValue":{
+      "description": "Representa un unico valor de texto que no es multicultura i NO admite Null.",
+      "allOf": [
+        { "$ref": "#/definitions/textValue" },
+        {
+          "properties": {
+            "cultures": { "enum": [ false ] },
+            "stvalue": { 
+              "items": [],
+              "minItems": 1,
+              "maxItems": 1
+            },
+            "dblvalue": { "type": "null" }
+          }
+        }
+      ]
+    },
+
+    "textValueNotNull": {
+      "description": "el valor puede ser multicultura o no, no tiene unidad de medición, No admite la representación de un texto null y no puede ser numérico.",
+      "allOf": [
+        { "$ref": "#/definitions/textValue" },
+        {
+          "properties": {
+            "dblvalue": { "type": "null" },
+            "unit": { "type": "null" },
+            "stvalue": { 
+              "items": [],
+              "minItems": 1
+            }
+          }
+        }
+      ]
+    },
+
+    "basePayLoad":{
+
+      "title": "Representación de la información correspondiente a los elementos solicitados",
+      "description": "La información de los elementos codificada en bas64, tambén indica si esta comprimida y con que algortimo.",
+      "type": "object",
+      "properties": {
+        "format": {
+          "description": "Formato en el que se expresa el contenido de los elementos solicitados, actualmente solo bc3 es soportado.",
+          "$ref": "#/definitions/enumPayLoadFormat" 
+        },
+        "compression": {
+          "description": "indica el algoritmo de compressión utiltizado, actulmente se contemplan zip y tar. null en caso de no utilizar ninguno",
+          "anyOf": [
+            { "$ref": "#/definitions/enumCompressionAlgorithm" },
+            { "type": "null" }
+          ]          
+        },
+        "content": {
+          "description": "indica el algoritmo de compressión utiltizado, actulmente se contemplan zip y tar. null en caso de no utilizar ninguno",
+          "anyOf": [
+            { "type": "null" },
+            { "enum": [ "" ] },
+            { "allOf": [
+                { "contentEncoding": "base64" },
+                { "type": "string" }
+              ]
+            }
+          ]
+        }
+      },
+
+      "additionalProperties": false,
+      "required": [ "format", "compression", "content" ]
+    },
+
+    "bc3PayLoad": {
+      "description": "Representación de la información correspondiente a los elementos solicitados expresada en foramto bc3.",
+      "allOf": [
+        { "$ref": "#/definitions/basePayLoad" },
+        {
+          "properties": {
+            "format": { "enum": [ "bc3" ] }
+          }
+        }
+      ]
+    },
+
+    "databaseGroup":{
+      "description": "Un proveedor de bases de datos puede agrupar/clasificar sus bases de datos segun diferentes agrupaciones, este objeto representa cada una de las agrupaciones.",
+        "properties": {
+          "id": {
+            "description": "Identificador de la classificación, cada proveedor tiene los suyos propios a excepción del 0 que es común para todos y se reseva para la agrupación: Todas las bases de datos",
+            "type": "integer"
+          },
+          "description": {
+            "description": "Descripción de la agrupación en diferentes idiomas.",
+            "$ref": "#/definitions/multicultureValue"
+          }
+        },
+
+        "additionalProperties": false,
+        "required": [ "id", "description" ]
+    },
+
+    "database": {
+
+      "title": "Nombre y version de la base de datos.",
+      "description": "Cada base de datos puede tener multiples versiones.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Nombre del banco o base de datos ex: BEDEC",
+          "type": "string"
+        },
+        "version": {
+          "description": "De una misma base de datos puede haver mas de una versión publicada. Un ejemplo de versión podría ser la fecha: 2020-01-30 pero puede ser otro valor.",
+          "type": "string"
+        }
+      },
+
+      "additionalProperties": false,
+      "required": [ "name", "version" ]
+
+    },
+
+    "extendedDatabase":{
+      "description": "Incorpora información adicional a la base de datos (banco): una descripción multiidioma, el número maximo de elementos, las culturas en las que está disponible la base de datos,...",
+        "properties": {
+          "name": {
+            "description": "Nombre del banco o base de datos ex: BEDEC",
+            "type": "string"
+          },
+          "version": {
+            "description": "De una misma base de datos puede haver mas de una versión publicada. Un ejemplo de versión podría ser la fecha: 2020-01-30 pero puede ser otro valor.",
+            "type": "string"
+          },
+          "description": {
+            "description": "descripció del banc en les diferents cultures",
+            "$ref": "#/definitions/multicultureValue"
+          },
+          "adaptblocksize": {
+            "description": "Numero d’elements maxim que es poden demanar a una petició al banc per obtenir la informació de l’adapta.",
+            "type": "integer",
+            "minimum": 1
+          },
+          "id_application": {
+            "description": "agrupación de base de datos ...",
+            "type": "integer"
+          },
+          "cultures": {
+            "description": "Array que associa cada cultura (idioma) con un índice, este índice sirve para acceder  a un array de valores y obtener el texto en la cultura deseada.",
+            "type": "array",
+            "items": { "$ref": "#/definitions/culture" },
+            "minItems": 0,
+            "uniqueItems": true           
+          }
+        },
+
+        "additionalProperties": false,
+        "required": [ "name", "version", "description", "adaptblocksize", "id_application", "cultures" ]
+    },
+
+    "globalParameters": {
+
+      "title": "Parámetros globales del banco que influyen sobre la información de los elementos del banco.",
+      "description": "Los parámetros se expresan como una lista de objetos parametro global (globalParameterProperty) cada uno de ellos contiene la lista de valores que puede tomar.",
+      "type": "array",
+      "items": { "$ref": "#/definitions/globalParameterProperty" },
+      "minItems": 0,
+      "uniqueItems": true 
+    },
+
+    "baseGlobalParameterProperty": {
+
+        "title": "Definició d'un paràmetre global",
+        "description": "Representació d'un paràmetre global.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "nom de la propietat.",
+            "type": "string"
+          },
+          "id_property": { 
+            "type": "integer"
+          },
+          "type": {
+            "$ref": "#/definitions/enumType"
+          },
+          "globalparametervalues": {
+            "description": "Algunes propietats poden retornar una llista de valors. Si només te un valor es un array d′un element.",
+            "type": "array",
+            "items": { "$ref": "#/definitions/baseGlobalParameterValue" } ,
+            "minItems": 0,
+            "uniqueItems": false
+          }
+        },
+
+        "additionalProperties": false,
+        "required": [ "name", "id_property", "type", "globalparametervalues" ]
+    },
+
+    "globalParameterProperty": {
+      "description": "Representa cualquiera de los tipos validso de los parámetros globales: Numérico, Fecha,...",
+      "anyOf": [
+        { "$ref": "#/definitions/numericalGlobalParameterProperty" },
+        { "$ref": "#/definitions/booleanGlobalParemterProperty" },
+        { "$ref": "#/definitions/textGlobalParameterProperty" },
+        { "$ref": "#/definitions/dateGlobalParameterProperty" }
+      ]
+    },
+
+    "numericalGlobalParameterProperty":{
+      "description": "Parámetro global con valores Numéricos o null",
+      "allOf": [
+        { "$ref": "#/definitions/baseGlobalParameterProperty" },
+        {
+          "properties": {
+            "type": { "enum": [ "N"] },
+            "globalparametervalues": { "items": {"$ref": "#/definitions/numericalGlobalParameterValue" } }
+          }
+        }
+      ]
+    },
+
+    "booleanGlobalParemterProperty": {
+      "description": "Parámetro global con valores booleanos.",
+      "allOf": [
+        { "$ref": "#/definitions/baseGlobalParameterProperty" },
+        { 
+          "properties": {
+            "type": { "enum": [ "B"] },
+            "globalparametervalues": { "items": {"$ref": "#/definitions/booleanGlobalParameterValue" } }
+          }
+        }
+      ]
+    },
+
+    "textGlobalParameterProperty": {
+      "description": "Parametro global con valores de tipo texto, el valor no puede ser multicultura  i no puede ser numérico.",
+      "allOf": [
+        { "$ref": "#/definitions/baseGlobalParameterProperty" },
+        { 
+          "properties": {
+            "type": { "enum": [ "T"] },
+            "globalparametervalues": { "items": {"$ref": "#/definitions/textGlobalParameterValue" } }
+          }
+        }          
+      ]        
+    },
+
+    "dateGlobalParameterProperty": {
+      "description": "Parámetro global de tipo fecha. El formato de la fecha se expresa según ISO 8601. Ex: 2012-04-23T18:25:43.511Z",
+      "allOf": [
+        { "$ref": "#/definitions/baseGlobalParameterProperty" },
+        { 
+          "properties": {
+            "type": { "enum": [ "D"] },
+            "globalparametervalues": { "items": {"$ref": "#/definitions/dateGlobalParameterValue" } }
+          }
+        }          
+      ]
+    },
+
+    "baseGlobalParameterValue":{
+
+      "title": "Valor que puede tomar un parámetro global.",
+      "description": "Representación del valor(es) que que puede tomar el parámetro global.",
+      "type": "object",
+      "properties": {
+        "id_value": {
+          "description": "identificador del parámetro global, sirve para que el proveedor de base de datos lo pueda identiifcar.",
+          "type": "integer"
+        },
+        "cultures": {
+          "description": "true indica que valor varia según la cultura. false indicar que el valor no varia según la cultura.",
+          "type": "boolean"
+        },
+        "stvalue": {
+          "description": "Array que contiene el mismo texto en diferentes idiomas, la posición en el array determina el idioma: 0- catalán, 1-castellano, 2-ingles. La posiciones no son fijas y estan definides en el objeto banco. En caso que el atributo culturas sea false, entonces el array stvalue solo tiene un elemento.",
+          "type": "array",
+          "items": { 
+            "anyOf": [
+              {"type": "string"},
+              {"type": "null"}
+            ]
+          },
+          "minItems": 0,
+          "uniqueItems": false
+        },
+        "dblvalue": {
+          "description": "Contiene el valor en caso de ser numérico.",
+          "anyOf": [
+            {"type": "number"},
+            {"type": "integer"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [ "id_value", "cultures", "stvalue", "dblvalue" ]
+    },
+
+    "globalParametreValue": {
+      "description": "Cualquiera de los valores validos que puede tomar un parámetro: numerico, texto, fecha, booleano.",
+      "anyOf": [
+        { "$ref": "#/definitions/numericalGlobalParameterValue" },
+        { "$ref": "#/definitions/booleanGlobalParameterValue" },
+        { "$ref": "#/definitions/dateGlobalParameterValue" },
+        { "$ref": "#/definitions/textGlobalParameterValue" }
+      ]
+    },
+
+    "numericalGlobalParameterValue": {
+      "description": "representación que ha de tener un valor numérico.",
+      "allOf": [
+        { "$ref": "#/definitions/baseGlobalParameterValue" },
+        {
+          "properties": {
+            "cultures": { "enum": [false ] },
+            "stvalue": {
+              "items": [],
+              "minItems": 0,
+              "maxItems": 0
+            }
+          }
+        }
+      ]
+    },
+
+    "booleanGlobalParameterValue": {
+      "description": "representación que ha de tener un valor booleano. 0-false 1-true",
+      "allOf": [
+        { "$ref": "#/definitions/numericalGlobalParameterValue" },
+        {
+          "properties": {
+            "dblvalue": { "enum": [ 0, 1] },
+            "unit": { "type": "null" }
+          }
+        }
+      ]
+    },
+
+    "dateGlobalParameterValue": {
+      "description": "Valor que representa una fecha, la fecha según ISO 8601. Ex: 2012-04-23T18:25:43.511Z",
+      "allOf": [
+        { "$ref": "#/definitions/baseGlobalParameterValue" },
+        {
+          "properties": {
+            "cultures": { "enum": [ false ] },
+            "stvalue": { 
+              "items": {
+                "anyOf": [
+                  {"pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+                  {"pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"}                
+                ]
+              },
+              "minItems": 1,
+              "maxItems": 1
+            },
+            "dblvalue": { "type": "null" }
+          }
+        }
+      ]
+    },
+
+    "textGlobalParameterValue": {
+      "description": "Un valor de texto únic, no esta expresado con multiples cultures, ha de tener cultures a false, ha de tener almenos un texto en stvalue y dblvalue ha de ser null.",
+      "allOf": [
+        { "$ref": "#/definitions/baseGlobalParameterValue" },
+        {
+          "properties": {
+            "cultures": { "enum": [ false ] },
+            "stvalue": { 
+              "items": [],
+              "minItems": 0,
+              "maxItems": 1
+            },
+            "dblvalue": { "type": "null" },
+            "unit": { "type": "null" }            
+          }
+        }
+      ]
+    },
+
+    "asyncTask":{
+
+      "title": "Identificador de la tarea asíncrona.",
+      "description": "Cuando se solicita una tarea asíncrona, se devuelve un identificador de la tarea para posteriormente preguntar si ha finalizado",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Identificador de la tarea.",
+          "type": "integer"
+        },
+        "isAsync": {
+          "description": "indica si es asincrona, sempre es true.",
+          "enum": [ true ] 
+        },
+      },
+
+      "additionalProperties": false,
+      "required": [ "id", "isAsync" ]
+    },
+
+    "asyncStatus":{
+
+      "title": "Estado en el que se encuentra la tarea asíncrona.",
+      "description": "Nos informa de si la tarea ha finalizado, esta en curso, aún no ha empezado...",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Identificador de la tarea.",
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/definitions/enumAsyncStatus"
+        },
+        "started": {
+          "description": "Indica que la tarea está iniciada.",
+          "type": "boolean"
+        },
+        "finished": {
+          "description": "Indica que la tarea ha finalizado.",
+          "type": "boolean"
+        },
+        "running": {
+          "description": "Indica que la tarea está en ejecución.",
+          "type": "boolean"
+        },
+        "queue_position": {
+          "description": "Posición que ocupa en la lista de espera antes de iniciar su ejecución.",
+          "anyOf": [
+            {"type": "integer"},
+            {"type": "null"}
+          ]        
+        },
+        "start_time": {
+          "description": "Hora de incio de la tarea.",
+          "$ref": "#/definitions/dateValue"
+        },
+        "end_time": {
+          "description": "Hora de fin de la tarea.",
+          "$ref": "#/definitions/dateValue"
+        },
+        "savedresult": {
+          "description": "Indica que ya es posible realizar la llamada para recuperar la información de la llamada asíncrona .",
+          "type": "boolean"
+        },
+        "origen": {
+          "description": "Describe quien ejecuta la tarea asíncrona.",
+          "type": "string"
+        },
+      },
+
+      "additionalProperties": false,
+      "required": [ "id", "status", "started", "finished", "running", "queue_position", "start_time", "end_time", "savedresult", "origen" ]
+    },
+
+    "endpointGetDabasesGroupsResponse": {
+
+      "title": "Lista con las agrupaciones de bases de datos disponibles en el proveedor.",
+      "description": "Cada agrupación es un conjuntoo de bases de datos que tienen ciertas caracteristicas en común.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "description": "Información sobre si la petición ha funcionado correctamente o ha habido errores.",
+          "$ref": "#/definitions/status"
+        },
+        "cultures": {
+          "description": "Array que associa cada cultura (idioma) con un índice, este índice sirve para acceder  a un array de valores y obtener el texto en la cultura deseada.",
+          "type": "array",
+          "items": { "$ref": "#/definitions/culture" },
+          "minItems": 0,
+          "uniqueItems": true           
+        },
+        "databasegroups": {
+          "description": "Lista de Agrupaciones disponibles.",
+          "type": "array",
+          "items": { "$ref": "#/definitions/databaseGroup" },
+          "minItems": 1,
+          "uniqueItems": true             
+        }
+      },
+
+      "additionalProperties": false,
+      "required": [ "status", "cultures", "databasegroups" ]
+    },
+    
+
+    "endpointGetDatabasesRequest": {
+
+      "title": "Solicitar al proveedor de base de datos la lista de bases de datos disponibles.",
+      "description": "Obtienen la lista de bancos (bases de datos) para los que el usuario tienen licencia.",
+      "type": "object",
+      "properties": {
+        "id_applications": {
+          "description": "Lista con las agrupaciones, se devuolveran las bases de datos correspondientes a las aplicaciones solicitadas: 1 - BEDEC Construcción, 2 - BEDEC Sostenibilidad. En caso que el proveedor de bases de datos no tenga clasificadas sus bases de datos usar la aplicación 0.",
+          "type": "array",
+          "items": { "type": "integer" },
+          "minItems": 1,
+          "uniqueItems": true             
+        }
+      },
+      "additionalProperties": false,
+      "required": [ "id_applications" ]
+    },
+
+    "endpointGetDabasesResponse": {
+
+      "title": "Lista de bancos (bases de datos) que el usuario puede hacer un adapta.",
+      "description": "El usuario ha de tener una licencia valida según el tipo de información solicita: ecocnomica, ambiental,...",
+      "type": "object",
+      "properties": {
+        "status": {
+          "description": "Información sobre si la petición ha funcionado correctamente o ha habido errores.",
+          "$ref": "#/definitions/status"
+        },
+        "databases": {
+          "description": "Lista de bases de datos (bancos) con el nombre y la versión.",
+          "type": "array",
+          "items": { "$ref": "#/definitions/extendedDatabase" },
+          "minItems": 0,
+          "uniqueItems": true             
+        }
+      },
+
+      "additionalProperties": false,
+      "required": [ "status", "databases" ]
+    },
+
+    "endpointGlobalParametersRequest": {
+      "title": "Solicitud para obtener la lista de parámetros globales del banco y para cada parámetro la lista de posibles valores que puede tomar.",
+      "description": "Dado un idioma (cultura), una agrupación (id_application), y una versión del banco .",
+      "type": "object",
+      "properties": {
+        "id_language": {
+          "description": "Indice del array de culturas  ejempol: 0- catalán, 1-castellano 2-ingles.",
+          "$ref": "#/definitions/enumCultureIndex"
+        },                    
+        "id_application": {
+          "description": "identificador de la agrupación a la que pertenece el banco, si no pertenece a ninguna 0.",
+          "$type": "integer"
+        },
+        "version": {
+          "description": "Versión del banco, puede ser una fecha o cualquier otro texto que indique su versión.",
+          "type": "string"
+        }
+      },
+
+      "additionalProperties": false,
+      "required": [ "id_language", "id_application" , "version" ]
+    },
+
+    "endpointGlobalParametersResponse":{
+      "title": "Respuesta con la información sobre los parámetros globales solicitados.",
+      "description": "Los paràmetros y los valores de cada paràmetro estan en el idioma en el que se han solitado.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "description": "Información sobre si la petición ha funcionado correctamente o ha habido errores",
+          "$ref": "#/definitions/status"
+        },
+        "globalparameters": {
+          "description": "Lista con los parámetros globales que hemos solicitado.",
+          "$ref": "#/definitions/globalParameters"
+        }
+      },
+      "additionalProperties": false,
+      "required": [ "status", "globalparameters" ]
+    },
+
+    "endpointAdaptaAsyncRequest": {
+
+      "title": "Obtener la información de los elementos solictados.",
+      "description": "Recuperamos del banco (base de datos) la información en formato bc3, que ahora es el único soportado.",
+      "type": "object",
+      "properties": {
+        "database": {
+          "description": "Nombre de la base de datos a la que solictamos la información.",
+          "type": "string"
+        },
+        "version": {
+          "description": "versión de la base de datos a la que solicitamos la información.",
+          "type": "string"
+        },
+        "globalparameters": {
+          "description": "Parámetros globales con los que se desea recuperar la información de los elementos.",
+          "$ref": "#/definitions/globalParameters"
+        },
+        "elements": {
+          "description": "Lista con los códigos de los elementos de los que deseamos recuperar la información.",
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "uniqueItems": true                 
+        }
+      },
+
+      "additionalProperties": false,
+      "required": [ "database", "version", "globalparameters", "elements" ]
+    },
+
+    "endpointAdaptaAsyncResponse": {
+
+      "title": "Devuelve el identificador de la tarea asíncrona creada para atender la solicitud d'obtención de información de elementos.",
+      "description": "El identificador sera usado posteriormente para consultar el estado de la tarea, si se ha iniciado, si ha acabado, si está en curso...",
+      "type": "object",
+      "properties": {
+        "status": {
+          "description": "Información sobre si la petición a un endpoint ha funcionado correctament o ha habido errores.",
+          "$ref": "#/definitions/status"
+        },
+        "data": {
+          "description": "Identificador de la tarea asíncrona.",
+          "$ref": "#/definitions/asyncTask"
+        }
+      },
+
+      "additionalProperties": false,
+      "required": [ "status", "data" ]
+    },
+
+    "endpointAdaptaAsyncStatusResponse": {
+
+      "title": "Estado en el que se encuentra la tarea asíncrona.",
+      "description": "Si la tarea, si se ha iniciado, si ha acabado, si está en curso...",
+      "type": "object",
+      "properties": {
+        "status": {
+          "description": "Información sobre si la petición a un endpoint ha funcionado correctament o ha habido errores.",
+          "$ref": "#/definitions/status"
+        },
+        "data": {
+          "description": "Información sobre el estado de la tarea asíncrona.",
+          "$ref": "#/definitions/asyncStatus"
+        }
+      },
+
+      "additionalProperties": false,
+      "required": [ "status", "data" ]
+    },
+
+    "endpointGetAdaptaResponse": {
+
+      "title": "Contiene la información de los elementos solicitados.",
+      "description": "La información se encuentra definida en formato bc3",
+      "type": "object",
+      "properties": {
+        "status": {
+          "description": "Información sobre si la petición a un endpoint ha funcionado correctament o ha habido errores.",
+          "$ref": "#/definitions/status"
+        },
+        "database": {
+          "description": "objecte amb la informació del banc",
+          "$ref": "#/definitions/database"
+        },
+        "globalparameters": {
+          "description": "Parámetros globales con los que se ha obtenido la información de los elementos.",
+          "$ref": "#/definitions/globalParameters"
+        },
+        "payload": {
+          "description": "Llista d'objectes document. Els documents son referenciats pels elements mithançant una propietat de tipus O (documentReferenceValue)",
+          "$ref": "#/definitions/bc3PayLoad"
+        }                       
+      },
+
+      "additionalProperties": false,
+      "required": [ "status", "database", "globalparameters", "payload" ]
+    },
+
+    "status": {
+
+      "title": "Información sobre si la petición a un endpoint ha funcionado correctament o ha habido errores.",
+      "description": "En caso de error en el array de mensajes se pueden encontrar mas detalles.",
+      "type": "object",
+      "properties": {
+        "returncode": {
+          "description": "Código numérico que indica si hay error, 0 - OK, en caso contrario error.",
+          "type": "integer"
+        },
+        "messages": {
+          "description": "En caso de error, opcionalmente, puede haber uno o mas mensajes explicativos del error. Los mensajes no son multiidioma y se expresan en ingles.",
+          "type": "array",
+          "items": { "$ref": "#/definitions/message" },
+          "minItems": 0,
+          "uniqueItems": true 
+        }      
+      },
+
+      "additionalProperties": false,
+      "required": [ "returncode", "messages" ]
+    },
+
+    "message": {
+
+      "title": "Mensaje del error producido en la llamada a un endpoint.",
+      "description": "Contiene el texto del mensaje expresado en ingles.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "description": "Codigo numérico que identifica el mensaje, cada proveedor de bases de datos tiene sus propios códigos de mensaje.",
+          "type": "integer"
+        },
+        "message": {
+          "description": "Texto en ingles que describe el problema.",
+          "type": "string"
+        }      
+      },
+      "additionalProperties": false,
+      "required": [ "code", "message" ]
+
+    }
+
+
+
+
+  },
+
+
+  "oneOf": [
+    {"$ref": "#/definitions/replaceThisPlaceholder" }
+  ]
+
+}

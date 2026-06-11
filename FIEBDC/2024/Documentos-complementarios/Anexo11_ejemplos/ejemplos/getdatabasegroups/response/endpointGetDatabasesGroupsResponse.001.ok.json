@@ -1,0 +1,40 @@
+{
+  "status":  {
+    "returncode": 0,
+    "messages": []
+  },
+  "cultures": [
+      {
+        "culture": "es-ES",
+        "index": 0
+      },
+      {
+        "culture": "ca-ES",
+        "index": 1
+      }
+  ],        
+  "databasegroups": [
+    {
+      "id": 0,
+      "description": {
+        "cultures": true,
+        "stvalue": [
+          "Todas las bases de datos",
+          "Totes les bases de dades"
+        ],
+        "dblvalue": null
+      }
+    },
+    {
+      "id": 10,
+      "description": {
+        "cultures": true,
+        "stvalue": [
+          "Bases de datos de construcción",
+          "Bases de dades de la construcció"
+        ],
+        "dblvalue": null
+      }
+    }       
+  ]
+}

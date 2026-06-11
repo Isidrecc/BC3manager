@@ -1,0 +1,9 @@
+{
+    "returncode": 100,
+    "messages": [
+        {
+            "code": 2,
+            "message": "Endpoint not found"
+        }
+    ]
+}
