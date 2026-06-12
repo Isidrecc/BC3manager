@@ -73,7 +73,7 @@ El servidor abre el navegador solo, en `127.0.0.1` (no `localhost`, que en algun
 
 ## Testing
 
-Run `python3 tests/test_basico.py` after any change to model.py, lector.py or escritor.py. There's a sample file `ejemplo_son_font.bc3` for testing (regenerable with `python3 scripts/gen_ejemplo.py`). Expected PEM total: 4.523,25 €.
+Run `python3 tests/test_basico.py` after any change to model.py, lector.py or escritor.py. There's a sample file `ejemplo_son_font.bc3` for testing (regenerable with `python3 scripts/gen_ejemplo.py`). Expected PEM total: 4.523,25 €. OJO: `ejemplo_son_font.bc3` NO trae registro `~K` (→ `redondeo_activo=False`, `ci_pct=0`): vale para probar lectura/estructura, NO redondeos ni CI — para eso usa `Test_Alqueria.bc3` o `Test_REDONDEO.bc3`.
 
 Los tests `test_alqueria_*` usan `tests/Test_Alqueria.bc3` (Presto 20 / FIEBDC-2016 real, con CI y redondeos) y **blindan** el comportamiento de costes indirectos y redondeo de los invariantes 5-7. Si tocas CI, redondeos o lectura del `~K` y se rompen, NO los relajes sin entender por qué: los valores están verificados contra el informe de desglose de precios de Presto. Si `Test_Alqueria.bc3` no está, esos tests se saltan solos.
 
