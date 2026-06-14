@@ -5,6 +5,33 @@ y las reglas que NO hay que romper, ver `CLAUDE.md` (invariantes 5-7).
 
 ---
 
+## 2026-06 — Conservar las partidas alzadas al guardar (fix)
+
+Al guardar/exportar un BC3 se perdían las **partidas alzadas** (mediciones sin
+desglose línea a línea, solo total declarado). El escritor descartaba todo
+registro `~M` sin líneas; como el autoguardado reescribe el archivo en cada
+edición, bastaba un cambio cualquiera para perder esas partidas y su importe.
+
+- **Síntoma medido:** en `tests/Test_Alqueria.bc3`, tras un ciclo
+  guardar→reabrir el PEM caía **7.964,67 €** (de 9.073.347,54 a 9.065.382,87) —
+  la alzada `542.0600`, que pasaba a importe 0. Las mediciones bajaban de 283 a
+  282. Ocurría en silencio, sin aviso.
+- **Arreglo (`io/escritor.py`):** (1) `_mediciones_ordenadas` ya no salta las
+  mediciones sin líneas que tienen total declarado (solo descarta las realmente
+  vacías); (2) `_reg_M` escribe el `total_declarado` cuando no hay líneas (antes
+  escribía la suma de líneas, que es 0 sin líneas → medición 0). Cumple la norma
+  FIEBDC (p.21): el registro `~M` debe figurar siempre, exista o no desglose.
+- **Test de regresión:** `test_alqueria_round_trip_conserva_partida_alzada`
+  blinda el ciclo leer→escribir→releer (PEM idéntico, nº de mediciones y el
+  importe de la alzada conservados). Falla con el código viejo, pasa con el
+  nuevo. 26/26 tests OK.
+- **Pendiente (no incluido aquí):** tras exportar, el banner de validación sigue
+  avisando de ~504.843 € y "38 conceptos inconsistentes". Es un fallo distinto y
+  **cosmético** (el `~C` de capítulo se escribe sin el CI): no afecta al cálculo,
+  queda para otra sesión.
+
+---
+
 ## 2026-06 — Reorganización de la documentación
 
 - Nueva carpeta `docs/` con la documentación técnica, cada tema en un único

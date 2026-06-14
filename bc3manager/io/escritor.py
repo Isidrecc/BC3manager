@@ -147,7 +147,13 @@ class EscritorBC3:
         items = []
         for concepto in self.p.conceptos.values():
             for codigo_padre, medicion in concepto.mediciones.items():
-                if not medicion.lineas:
+                # Emitimos también las mediciones SIN líneas de detalle pero CON
+                # total declarado: son PARTIDAS ALZADAS (la norma FIEBDC exige
+                # que el registro ~M figure siempre, exista o no desglose). Antes
+                # se saltaban y la alzada perdía su medición -> importe 0 al
+                # reabrir. Solo se descartan las mediciones realmente vacías
+                # (ni líneas ni total declarado).
+                if not medicion.lineas and not medicion.total_declarado:
                     continue
                 ppath = posiciones.get(codigo_padre)
                 padre_c = self.p.get(codigo_padre)
@@ -263,7 +269,11 @@ class EscritorBC3:
                 f"{_fmt_m(ln.n_uds)}\\{_fmt_m(ln.longitud)}\\"
                 f"{_fmt_m(ln.anchura)}\\{_fmt_m(ln.altura)}\\"
             )
-        total = _fmt(medicion.total, 3)
+        # Una medición SIN líneas (partida alzada) escribe su total declarado;
+        # con líneas, la suma de las líneas. `medicion.total` es 0 cuando no hay
+        # líneas, así que sin esto la alzada se guardaría con medición 0 (importe
+        # 0 al reabrir) aunque ya no se descarte el registro.
+        total = _fmt(medicion.total if medicion.lineas else medicion.total_declarado, 3)
         return f"~M|{relacion}|{posicion}|{total}|{''.join(subcampos)}|"
 
 

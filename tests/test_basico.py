@@ -402,6 +402,41 @@ def test_alqueria_partida_alzada_sin_lineas():
     assert abs(p.importe_en_padre("542.0600", "003#") - 7964.67) < 0.01
 
 
+def test_alqueria_round_trip_conserva_partida_alzada():
+    """El ciclo leer->escribir->releer debe conservar el PEM y TODAS las
+    mediciones, incluidas las PARTIDAS ALZADAS (~M sin líneas de detalle, solo
+    total declarado).
+
+    Antes el escritor descartaba toda medición sin líneas, así que la alzada
+    542.0600 (total declarado 1, importe 7.964,67) desaparecía al guardar y el
+    PEM de Alquería caía exactamente esos 7.964,67 € (de 9.073.347,54 a
+    9.065.382,87). Como el autoguardado reescribe el archivo en cada edición,
+    bastaba un cambio cualquiera para perder la alzada para siempre."""
+    if not os.path.exists(ALQUERIA):
+        return
+    p1 = leer_bc3(ALQUERIA)
+    pem1 = p1.presupuesto_total()
+    n_med1 = sum(len(c.mediciones) for c in p1.conceptos.values())
+    imp_alzada1 = p1.importe_en_padre("542.0600", "003#")
+    assert imp_alzada1 > 0, "precondición: la alzada debe tener importe en el original"
+    with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
+        salida = tmp.name
+    try:
+        escribir_bc3(p1, salida)
+        p2 = leer_bc3(salida)
+    finally:
+        os.unlink(salida)
+    n_med2 = sum(len(c.mediciones) for c in p2.conceptos.values())
+    assert n_med2 == n_med1, f"se perdieron mediciones: {n_med1} -> {n_med2}"
+    imp_alzada2 = p2.importe_en_padre("542.0600", "003#")
+    assert abs(imp_alzada2 - imp_alzada1) < 0.01, (
+        f"la alzada 542.0600 cambió de importe: {imp_alzada1:.2f} -> {imp_alzada2:.2f}"
+    )
+    assert abs(p2.presupuesto_total() - pem1) < 0.01, (
+        f"PEM cambió en round-trip: {pem1:,.2f} -> {p2.presupuesto_total():,.2f}"
+    )
+
+
 def test_alqueria_sin_discrepancias_y_pem():
     """Con todo bien leído del ~K, no debe haber discrepancias de precio ni de
     medición, y el PEM debe quedar a < 0,05% del valor congelado del archivo."""
