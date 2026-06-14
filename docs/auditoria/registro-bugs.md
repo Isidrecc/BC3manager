@@ -16,7 +16,7 @@
 | #   | Problema                                                                | Gravedad | Estado                 |
 | --- | ----------------------------------------------------------------------- | -------- | ---------------------- |
 | 1   | Partidas alzadas se pierden al guardar                                  | 🔴 ALTA  | ✅ Resuelto 2026-06-14  |
-| 2   | El archivo guardado pierde la referencia para validar                   | 🔴 ALTA  | ⬜ Pendiente            |
+| 2   | El archivo guardado pierde la referencia para validar                   | 🔴 ALTA  | ✅ Resuelto 2026-06-14  |
 | 3   | Posible CI duplicado cuando el % viene de un concepto `%CI`             | 🔴 ALTA  | ⬜ Pendiente (sospecha) |
 | 4   | El campo 1 del `~K` se interpreta en otro orden que la norma            | 🟠 MEDIA | ⬜ Pendiente            |
 | 5   | Al guardar se pierde el campo 3 del `~K` (DN y DD)                      | 🟠 MEDIA | ⬜ Pendiente            |
@@ -33,6 +33,7 @@
 | 16  | Casillas en blanco de mediciones se muestran como "0" (debería ser "1") | 🔵 UI    | ⬜ Pendiente            |
 | 17  | Celdas que cortan el contenido y no se pueden redimensionar             | 🔵 UI    | ⬜ Pendiente            |
 | 18  | El título de algunas partidas no se muestra ("—"), intermitente         | 🔵 UI    | ⬜ Pendiente            |
+| 19  | El escritor siempre añade un `~K` (re-redondea archivos sin `~K`)        | 🟠 MEDIA | ⬜ Pendiente            |
 
 Leyenda: ✅ resuelto · ⬜ pendiente · 🔴 alta · 🟠 media · 🟡 baja · 🔵 interfaz/usabilidad.
 
@@ -47,7 +48,9 @@ Leyenda: ✅ resuelto · ⬜ pendiente · 🔴 alta · 🟠 media · 🟡 baja �
 - **Por qué es grave:** el **autoguardado** reescribe el archivo original tras CUALQUIER edición en la web. Basta corregir una errata en un resumen para que el archivo pierda la alzada para siempre (salvo deshacer inmediato o copia previa). Además incumple la norma (p.21): *"deberá figurar siempre este registro \[~M\], exista o no desglose de mediciones"*.
 - **Por qué no lo cazan los tests:** `test_round_trip` usa `ejemplo_son_font.bc3`, que no tiene partidas alzadas; `test_alqueria_partida_alzada_sin_lineas` solo comprueba la lectura, no el ciclo completo.
 
-### 2. El archivo guardado pierde la referencia para validar — VERIFICADO
+### ~~2. El archivo guardado pierde la referencia para validar~~ — ✅ RESUELTO 2026-06-14
+
+> **Resuelto** el 2026-06-14 (commit `fix: validacion coherente tras guardar (importe de capitulo, sin Forma B)`). En `io/escritor.py`: el `~C` del capítulo guarda su **importe** (suma de importes de partidas, con CI), siempre; el `~M` guarda el **total redondeado** como Presto. En `core/model.py`: la autocomprobación compara el capítulo por su **importe** (suma de partidas), no por `CD×(1+CI)` — ese cálculo se eliminó (solo cuadraba por tolerancia). Tras guardar→reabrir: **0 discrepancias y hueco de PEM 0,00** en Alquería, Test_SONFONT y Test_REDONDEO. Blindado por `test_alqueria_round_trip_validacion_limpia`. El Excel de validación muestra ahora 4 columnas de precio (archivo/calc × sin/con CI). Debajo, el diagnóstico original.
 
 - **Dónde:** `io/escritor.py::_reg_C` escribe el precio **recalculado** de cada concepto; para los capítulos, eso es el coste directo **sin CI**, cuando el archivo de origen (Presto 20) traía el precio con CI. Y `_reg_M` escribe como total declarado la suma cruda de líneas (`Medicion.total`), no el total con redondeo Presto (`total_medicion`) ni el declarado original.
 - **Efecto medido:** tras guardar y releer Alquería, la validación pasa de **0 a 38 discrepancias de precio** y de 0 a 2 de medición, y la comparación de PEM archivo-vs-calculado pasa de 0,41 € a **504.843 €** de diferencia (≈ el 6% de CI que ya no está en los precios de capítulo guardados).
@@ -93,6 +96,13 @@ Leyenda: ✅ resuelto · ⬜ pendiente · 🔴 alta · 🟠 media · 🟡 baja �
 
 - **Dónde:** `io/lector.py::_reg_C` — `codigos.split("\\")[0]`: si un concepto declara varios códigos sinónimos (la norma p.8 lo permite), solo se registra el primero.
 - **Efecto:** si otro registro (`~D`, `~M`) referencia al concepto por un sinónimo, el enlace se rompe y se crea un concepto fantasma vacío → descomposición o medición perdida. No confirmado con archivo real.
+
+### 19. El escritor siempre añade un `~K` (re-redondea los archivos que no lo traían) — VERIFICADO
+
+- **Dónde:** `io/escritor.py::generar_texto` emite siempre `self._reg_K()`, traiga o no `~K` el archivo original.
+- **Efecto medido:** un archivo **sin** `~K` (p.ej. `ejemplo_son_font.bc3`) gana el redondeo por pasos al guardarse → al reabrir, sus valores se re-redondean. Ciclo guardar→reabrir: PEM 4.523,25 → **4.524,00** (y partidas como `E0101` 11,375 → 11,38).
+- **Por qué importa poco en la práctica:** los archivos reales de Presto **siempre** traen `~K`; solo afecta a sintéticos o exportaciones mínimas sin él. Pero es de la familia "el guardado cambia el PEM" (como el nº 1), por eso se registra. Relacionado con el nº 5 (ambos son el `~K` en la escritura).
+- **Hallado:** 2026-06-14, trabajando el nº 2. La auditoría no lo había aislado porque ningún test comprueba el round-trip del PEM de `ejemplo_son_font`.
 
 ## Gravedad BAJA — incoherencias sin efecto en importes (o con efecto muy improbable)
 
@@ -158,4 +168,4 @@ Leyenda: ✅ resuelto · ⬜ pendiente · 🔴 alta · 🟠 media · 🟡 baja �
 
 La validación al abrir (`validar_completo` + Excel/txt) **detecta bien** los descuadres internos del archivo de origen: mediciones cuyo total declarado no cuadra con sus líneas, precios del `~C` que no salen de su descomposición, y el PEM. Con Alquería: 0 discrepancias y PEM a 0,41 €.
 
-**No puede detectar** (porque ocurren después de validar): todo lo que el guardado estropea o descarta (nº 1, 2, 5, 11) — el programa no avisa de que va a perder registros que no soporta. Y **no compara** contra el archivo en los aspectos que no lee (tipos de línea, sinónimos, paramétricos). La especificación del comando de comparación ([spec-script-comparacion.md](spec-script-comparacion.md)) propone cubrir justo este hueco con un modo de ida-y-vuelta.
+**No puede detectar** (porque ocurren después de validar): todo lo que el guardado estropea o descarta (nº 5, 11, 19; los nº 1 y 2, que también lo eran, ya están resueltos) — el programa no avisa de que va a perder registros que no soporta. Y **no compara** contra el archivo en los aspectos que no lee (tipos de línea, sinónimos, paramétricos). La especificación del comando de comparación ([spec-script-comparacion.md](spec-script-comparacion.md)) propone cubrir justo este hueco con un modo de ida-y-vuelta.
