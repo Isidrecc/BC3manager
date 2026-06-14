@@ -40,7 +40,7 @@ python3 tests/test_basico.py
 
 | Test | Qué protege |
 |------|-------------|
-| `test_redondeos_k_distintos` | Lectura del campo 1 del `~K` (¡con el orden propio del programa — ver [problemas.md](problemas.md) nº 4: si la norma tiene razón, este test blinda una interpretación equivocada!) |
+| `test_redondeos_k_distintos` | Lectura del campo 1 del `~K` (¡con el orden propio del programa — ver [registro-bugs.md](registro-bugs.md) nº 4: si la norma tiene razón, este test blinda una interpretación equivocada!) |
 | `test_round_trip_conserva_redondeos_k` | El `~K` se reescribe y los decimales sobreviven al round-trip (solo campo 1 — el campo 3 no, ver problemas nº 5) |
 
 ### Con BC3 reales (`Test_Alqueria.bc3` Presto 20, `Test_SONFONT.bc3` Presto 8.8)
@@ -59,7 +59,7 @@ python3 tests/test_basico.py
 
 ## Qué NO está cubierto (huecos relevantes, en orden de importancia)
 
-1. **Round-trip de los BC3 reales.** El ciclo leer→escribir→releer solo se prueba con el ejemplo sintético. Un `test_alqueria_round_trip` habría cazado la pérdida de la partida alzada (−7.964,67 € de PEM) y la degradación de la validación tras guardar ([problemas.md](problemas.md) nº 1 y 2). Es el hueco nº 1.
+1. **Round-trip de los BC3 reales.** El ciclo leer→escribir→releer solo se prueba con el ejemplo sintético. Un `test_alqueria_round_trip` habría cazado la pérdida de la partida alzada (−7.964,67 € de PEM) y la degradación de la validación tras guardar ([registro-bugs.md](registro-bugs.md) nº 1 y 2). Es el hueco nº 1.
 2. **La escritura del campo 3 del `~K`** (DN/DD) — problemas nº 5.
 3. **Tipos de línea de medición** 1/2/3 (subtotales, fórmulas) — problemas nº 6.
 4. **La vía de respaldo del CI** (`%CI` sin `~K`) y su posible doble cómputo — problemas nº 3.

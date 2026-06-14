@@ -5,6 +5,22 @@ y las reglas que NO hay que romper, ver `CLAUDE.md` (invariantes 5-7).
 
 ---
 
+## 2026-06 — Registro de bugs vivo y flujo de trabajo de arreglos (docs)
+
+- `docs/auditoria/problemas.md` → `docs/auditoria/registro-bugs.md` ("Registro de
+  bugs y mejoras"): pasa de foto de auditoría a **documento vivo**, con una tabla
+  de estado arriba; al resolver un ítem se tacha con fecha y commit. El nº 1
+  (partidas alzadas) ya queda tachado (2026-06-14). Actualizados los enlaces de
+  los documentos que lo referenciaban.
+- `docs/guia-sesiones.md`: la plantilla de sesión de CÓDIGO recoge ahora el
+  **flujo de arreglo acordado** (entender el problema con pruebas → explicar y
+  proponer commit → luz verde → test primero → verificar → cerrar el bucle).
+- Se registran 3 bugs de **interfaz/usabilidad** pendientes (nº 16-18): casillas
+  de medición en blanco que se ven como "0", celdas que cortan el contenido sin
+  poder redimensionarse, y títulos de partida que a veces no se pintan ("—").
+
+---
+
 ## 2026-06 — Conservar las partidas alzadas al guardar (fix)
 
 Al guardar/exportar un BC3 se perdían las **partidas alzadas** (mediciones sin

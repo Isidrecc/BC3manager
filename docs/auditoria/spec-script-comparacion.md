@@ -39,7 +39,7 @@ Coge el BC3, lo pasa por el lector y el motor de cálculo, y compara **cantidad 
 
 ## Modo ida-y-vuelta (`--round-trip`) — la pieza que hoy NO existe
 
-La validación actual solo compara el archivo de **entrada** consigo mismo. El hueco detectado en la auditoría está en la **escritura** (ver [problemas.md](problemas.md) nº 1, 2 y 5), y este modo lo cubriría:
+La validación actual solo compara el archivo de **entrada** consigo mismo. El hueco detectado en la auditoría está en la **escritura** (ver [registro-bugs.md](registro-bugs.md) nº 1, 2 y 5), y este modo lo cubriría:
 
 1. Leer `archivo.bc3` → calcular PEM y todas las mediciones/importes (A).
 2. Escribirlo a un temporal con `escribir_bc3` → releerlo → calcular lo mismo (B).

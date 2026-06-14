@@ -51,17 +51,29 @@ Presto — si se rompen, NO los relajes sin entender por qué).
 No reescribas la documentación de fondo (docs/); solo el CHANGELOG si procede.
 No commitees: deja los cambios y sugiéreme el mensaje de commit.
 
-1. Antes de tocar nada: python3 tests/test_basico.py y confirma que todo pasa.
-2. [TAREA CONCRETA — pequeña y verificable. Si es grande, trocéala en varias
-   sesiones o varios commits.]
-3. Corre los tests otra vez. Si tocaste cálculo (model.py) o lectura/escritura
-   (io/), comprueba además con un BC3 real (tests/Test_Alqueria.bc3,
-   tests/Test_SONFONT.bc3) que el PEM no cambia.
-4. Explícame el cambio en lenguaje claro: qué hacía antes, qué hace ahora,
-   cómo puedo comprobarlo yo en la web.
-5. Si el cambio introduce una decisión de diseño nueva o cambia un invariante,
-   dímelo explícitamente: se documentará en la próxima sesión de documentación
-   (tú solo anótalo en el CHANGELOG).
+Así trabajamos un arreglo (flujo acordado — síguelo en este orden):
+
+1. ENTENDER el problema real, con pruebas. Antes de tocar nada corre los tests
+   (python3 tests/test_basico.py, todo verde) y REPRODUCE el fallo
+   empíricamente con un script de diagnóstico desechable. No te fíes solo de la
+   doc ni de la intuición: enséñame números concretos (PEM, importes) que
+   demuestren el fallo.
+2. EXPLICÁRMELO en lenguaje claro (sin tecnicismos) y proponerme ya el título +
+   explicación de commit que yo entienda, y cómo se va a solucionar.
+3. ESPERAR mi luz verde antes de modificar nada.
+4. ACOTAR el alcance: UN fallo por sesión, pequeño y verificable. Lo demás se
+   anota en docs/auditoria/registro-bugs.md, no se mezcla.
+5. TEST PRIMERO (red de seguridad): escribe una prueba que FALLE con el código
+   actual (demuestra que caza el fallo) → haz el arreglo mínimo → la prueba
+   pasa.
+6. VERIFICAR de punta a punta: toda la batería de tests + un BC3 real
+   (tests/Test_Alqueria.bc3, tests/Test_SONFONT.bc3) con números antes/después,
+   y dime cómo lo compruebo yo en la web.
+7. CERRAR el bucle: anota el cambio en el CHANGELOG. El tachado del ítem en
+   registro-bugs.md (con fecha y commit) y cualquier decisión de diseño nueva
+   van en la sesión de documentación —avísame de ellas— salvo que el código ya
+   esté commiteado y decidamos hacer ese cierre ahora. Claude no commitea:
+   sugiéreme el mensaje.
 ```
 
 ---
@@ -122,10 +134,11 @@ D) DIFERENCIAS archivo vs calculado: qué hace el programa cuando el importe
 
 Entregables, en docs/auditoria/, todo en lenguaje claro:
 1. auditoria-calculo.md — explica A, B, C y D con citas archivo::función.
-2. problemas.md — problemas y sospechas por gravedad (alta/media/baja), cada
-   uno con dónde está y por qué puede provocar diferencias de cantidades o
-   importes. Sin corregir nada. Distingue lo que la validación actual ya
-   detecta de lo que se le escapa.
+2. registro-bugs.md — problemas y sospechas por gravedad (alta/media/baja),
+   cada uno con dónde está y por qué puede provocar diferencias de cantidades o
+   importes. Es el documento VIVO: tabla de estado arriba, y al resolver un
+   ítem se tacha con fecha. Distingue lo que la validación actual ya detecta de
+   lo que se le escapa.
 3. spec-script-comparacion.md — especificación (sin programar) de un comando
    de comparación. OJO: el programa YA compara archivo vs calculado al abrir
    (validar_completo + Excel/txt). La spec debe REUTILIZAR eso como comando
