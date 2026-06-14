@@ -506,8 +506,8 @@ def _generar_excel_validacion(p, ruta_destino: str) -> str:
     ws = wb.create_sheet("Importes partidas")
     write_header(ws, [
         "Codigo", "En capitulo", "Descripcion", "Ud",
-        "Precio archivo (CD)", "Precio calc (CD)",
-        "Precio +CI (Presto)",
+        "Precio archivo sin CI", "Precio archivo +CI",
+        "Precio calc sin CI", "Precio calc +CI",
         "Medicion archivo (~M)", "Medicion calc (lineas)",
         "Importe archivo", "Importe calc",
         "Diferencia", "% dif",
@@ -515,8 +515,8 @@ def _generar_excel_validacion(p, ruta_destino: str) -> str:
     for i, d in enumerate(comp["partidas"], 2):
         row = [
             d["codigo"], d["padre"], d["resumen"], d["unidad"],
-            d["precio_archivo"], d["precio_calc"],
-            d["precio_calc_ci"],
+            d["precio_archivo"], d["precio_archivo_ci"],
+            d["precio_calc"], d["precio_calc_ci"],
             d["medicion_archivo"], d["medicion_calc"],
             d["importe_archivo"], d["importe_calc"],
             d["diferencia"], d["diferencia_pct"],
@@ -525,25 +525,25 @@ def _generar_excel_validacion(p, ruta_destino: str) -> str:
             cell = ws.cell(row=i, column=j, value=v)
             cell.border = bord
             if isinstance(v, (int, float)):
-                cell.number_format = "#,##0.0000" if j <= 9 else "#,##0.00"
+                cell.number_format = "#,##0.0000" if j <= 10 else "#,##0.00"
                 cell.alignment = Alignment(horizontal="right")
-            # Resaltar diferencia de importe (col 12) y de medición (col 8 vs 9)
-            if j == 12 and isinstance(v, (int, float)) and abs(v) >= 0.01:
+            # Resaltar diferencia de importe (col 13)
+            if j == 13 and isinstance(v, (int, float)) and abs(v) >= 0.01:
                 cell.fill = bad_fill
-        # Resaltar discrepancia de medición archivo vs calc
+        # Resaltar discrepancia de medición archivo vs calc (cols 9 y 10)
         if abs(d["medicion_archivo"] - d["medicion_calc"]) >= 0.01:
-            ws.cell(row=i, column=8).fill = bad_fill
             ws.cell(row=i, column=9).fill = bad_fill
+            ws.cell(row=i, column=10).fill = bad_fill
     # Fila total al final
     if comp["partidas"]:
         fila_total = len(comp["partidas"]) + 2
         tot_arch = sum(d["importe_archivo"] for d in comp["partidas"])
         tot_calc = sum(d["importe_calc"] for d in comp["partidas"])
         ws.cell(row=fila_total, column=1, value="TOTAL").font = Font(bold=True)
-        ws.cell(row=fila_total, column=10, value=round(tot_arch, 2)).font = Font(bold=True)
-        ws.cell(row=fila_total, column=11, value=round(tot_calc, 2)).font = Font(bold=True)
-        ws.cell(row=fila_total, column=12, value=round(tot_calc - tot_arch, 2)).font = Font(bold=True)
-        for j in (10, 11, 12):
+        ws.cell(row=fila_total, column=11, value=round(tot_arch, 2)).font = Font(bold=True)
+        ws.cell(row=fila_total, column=12, value=round(tot_calc, 2)).font = Font(bold=True)
+        ws.cell(row=fila_total, column=13, value=round(tot_calc - tot_arch, 2)).font = Font(bold=True)
+        for j in (11, 12, 13):
             c = ws.cell(row=fila_total, column=j)
             c.number_format = "#,##0.00"
             c.alignment = Alignment(horizontal="right")

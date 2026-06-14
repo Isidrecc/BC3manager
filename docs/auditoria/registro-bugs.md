@@ -13,26 +13,26 @@
 
 ## Estado de un vistazo
 
-| # | Problema | Gravedad | Estado |
-|---|----------|----------|--------|
-| 1 | Partidas alzadas se pierden al guardar | 🔴 ALTA | ✅ Resuelto 2026-06-14 |
-| 2 | El archivo guardado pierde la referencia para validar | 🔴 ALTA | ⬜ Pendiente |
-| 3 | Posible CI duplicado cuando el % viene de un concepto `%CI` | 🔴 ALTA | ⬜ Pendiente (sospecha) |
-| 4 | El campo 1 del `~K` se interpreta en otro orden que la norma | 🟠 MEDIA | ⬜ Pendiente |
-| 5 | Al guardar se pierde el campo 3 del `~K` (DN y DD) | 🟠 MEDIA | ⬜ Pendiente |
-| 6 | Tipos de línea de medición (subtotales/fórmulas) no se interpretan | 🟠 MEDIA | ⬜ Pendiente |
-| 7 | Los decimales "en negativo" del `~K` se ignoran | 🟠 MEDIA | ⬜ Pendiente |
-| 8 | Porcentajes con máscara de prefijo no soportados | 🟠 MEDIA | ⬜ Pendiente |
-| 9 | Códigos sinónimos del `~C` descartados | 🟠 MEDIA | ⬜ Pendiente (sospecha) |
-| 10 | El "tipo de información" del `~V` está al revés | 🟡 BAJA | ⬜ Pendiente |
-| 11 | El `~V` exportado pierde la propiedad y la fecha original | 🟡 BAJA | ⬜ Pendiente |
-| 12 | DRC y DEC del campo 3 del `~K` no se leen | 🟡 BAJA | ⬜ Pendiente |
-| 13 | El subtipo "4 = Auxiliar" choca con la norma 2024 | 🟡 BAJA | ⬜ Pendiente |
-| 14 | El campo 3 del `~D` no se lee | 🟡 BAJA | ⬜ Pendiente |
-| 15 | La detección del `%CI` de respaldo coge el primer match | 🟡 BAJA | ⬜ Pendiente |
-| 16 | Casillas en blanco de mediciones se muestran como "0" (debería ser "1") | 🔵 UI | ⬜ Pendiente |
-| 17 | Celdas que cortan el contenido y no se pueden redimensionar | 🔵 UI | ⬜ Pendiente |
-| 18 | El título de algunas partidas no se muestra ("—"), intermitente | 🔵 UI | ⬜ Pendiente |
+| #   | Problema                                                                | Gravedad | Estado                 |
+| --- | ----------------------------------------------------------------------- | -------- | ---------------------- |
+| 1   | Partidas alzadas se pierden al guardar                                  | 🔴 ALTA  | ✅ Resuelto 2026-06-14  |
+| 2   | El archivo guardado pierde la referencia para validar                   | 🔴 ALTA  | ⬜ Pendiente            |
+| 3   | Posible CI duplicado cuando el % viene de un concepto `%CI`             | 🔴 ALTA  | ⬜ Pendiente (sospecha) |
+| 4   | El campo 1 del `~K` se interpreta en otro orden que la norma            | 🟠 MEDIA | ⬜ Pendiente            |
+| 5   | Al guardar se pierde el campo 3 del `~K` (DN y DD)                      | 🟠 MEDIA | ⬜ Pendiente            |
+| 6   | Tipos de línea de medición (subtotales/fórmulas) no se interpretan      | 🟠 MEDIA | ⬜ Pendiente            |
+| 7   | Los decimales "en negativo" del `~K` se ignoran                         | 🟠 MEDIA | ⬜ Pendiente            |
+| 8   | Porcentajes con máscara de prefijo no soportados                        | 🟠 MEDIA | ⬜ Pendiente            |
+| 9   | Códigos sinónimos del `~C` descartados                                  | 🟠 MEDIA | ⬜ Pendiente (sospecha) |
+| 10  | El "tipo de información" del `~V` está al revés                         | 🟡 BAJA  | ⬜ Pendiente            |
+| 11  | El `~V` exportado pierde la propiedad y la fecha original               | 🟡 BAJA  | ⬜ Pendiente            |
+| 12  | DRC y DEC del campo 3 del `~K` no se leen                               | 🟡 BAJA  | ⬜ Pendiente            |
+| 13  | El subtipo "4 = Auxiliar" choca con la norma 2024                       | 🟡 BAJA  | ⬜ Pendiente            |
+| 14  | El campo 3 del `~D` no se lee                                           | 🟡 BAJA  | ⬜ Pendiente            |
+| 15  | La detección del `%CI` de respaldo coge el primer match                 | 🟡 BAJA  | ⬜ Pendiente            |
+| 16  | Casillas en blanco de mediciones se muestran como "0" (debería ser "1") | 🔵 UI    | ⬜ Pendiente            |
+| 17  | Celdas que cortan el contenido y no se pueden redimensionar             | 🔵 UI    | ⬜ Pendiente            |
+| 18  | El título de algunas partidas no se muestra ("—"), intermitente         | 🔵 UI    | ⬜ Pendiente            |
 
 Leyenda: ✅ resuelto · ⬜ pendiente · 🔴 alta · 🟠 media · 🟡 baja · 🔵 interfaz/usabilidad.
 

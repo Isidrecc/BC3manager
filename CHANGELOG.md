@@ -5,6 +5,55 @@ y las reglas que NO hay que romper, ver `CLAUDE.md` (invariantes 5-7).
 
 ---
 
+## 2026-06 — Cobertura de tests al día (docs)
+
+`docs/auditoria/estado-tests.md` pasa de la foto del 2026-06-11 (25/25) a
+documento vivo (**27/27**): añade los dos `test_alqueria_round_trip_*` al mapa
+test→qué-protege, un **inventario de los `.bc3` de prueba** (qué cubre y qué NO
+cada uno, y que `Test_SONFONT.bak/.xlsx/.pzh` no los usa ningún test), un
+**checklist de qué correr según lo que toques**, y retira el "round-trip de BC3
+reales" de los huecos (ya cubierto por los tests nuevos).
+
+---
+
+## 2026-06 — La validación deja de romperse al guardar (fix)
+
+Compañero del arreglo de las partidas alzadas. Al guardar/exportar, el `~C` de
+cada capítulo se escribía con el coste directo **sin** los costes indirectos
+(Presto guarda ahí el importe **con** el 6%), y el total de cada `~M` como suma
+cruda en vez del total redondeado. Tras guardar y reabrir, la validación —la red
+de seguridad del usuario— pasaba de 0 a **38 falsas discrepancias de precio + 2
+de medición**, y el hueco de PEM archivo-vs-calculado saltaba a **~+512.000 €**
+(el 6% de CI ausente de los precios de capítulo guardados).
+
+- **Arreglo (`io/escritor.py`):** (1) `_reg_C` escribe el **importe** del capítulo
+  (la suma de los importes de sus partidas, cada una con su CI), igual que Presto
+  — siempre, sin condiciones (con CI=0 el importe sale sin recargo). (2) `_reg_M`
+  escribe el **total redondeado** como Presto (`total_medicion`), no la suma
+  cruda (p.ej. `215.0030` → 112,21, no 111,326). El cálculo NO cambia: el precio
+  de capítulo nunca interviene en el PEM (recalcular suma de abajo arriba); esto
+  solo fija la referencia con la que el archivo se valida a sí mismo.
+- **Autocomprobación coherente (`core/model.py`):** `validar_completo` calculaba
+  el capítulo como `CD×(1+CI)` para compararlo, un cálculo que no existe en
+  ningún otro sitio y que solo cuadraba "por tolerancia". Ahora compara el
+  **importe del capítulo** (suma de importes de partidas), igual que
+  `comparar_importes_archivo` y que la pantalla. Resultado: comparación **exacta**
+  (hueco de PEM 0,00, no ~800 €) y robusta para cualquier archivo bien formado,
+  sin parches ni dependencia de tolerancias.
+- **Test de regresión:** `test_alqueria_round_trip_validacion_limpia` (ciclo
+  leer→escribir→releer: 0 discrepancias de precio y medición, PEM cuadrado).
+  Falla con el código viejo (38+2), pasa con el nuevo. **27/27 OK.**
+- **Verificado:** Alquería tras guardar→reabrir: PEM 9.073.347,54 € idéntico, 0
+  discrepancias, hueco de PEM −0,00 €. Sin regresión en Presto 8.8 ni en
+  archivos sin CI.
+- **Hallazgo lateral (no arreglado):** el escritor **siempre** emite un `~K`, así
+  que un archivo que no lo traía gana redondeo al guardarse y sus valores se
+  re-redondean (p.ej. `ejemplo_son_font.bc3`: PEM 4.523,25 → 4.524,00 en
+  round-trip). Es pre-existente e independiente de este arreglo; queda anotado
+  para el registro de bugs.
+
+---
+
 ## 2026-06 — Registro de bugs vivo y flujo de trabajo de arreglos (docs)
 
 - `docs/auditoria/problemas.md` → `docs/auditoria/registro-bugs.md` ("Registro de

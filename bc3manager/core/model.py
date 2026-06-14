@@ -574,21 +574,21 @@ class Presupuesto:
             c = self.conceptos.get(cod)
             if not c or not c.hijos:
                 continue
-            p_calc = c.precio
-            # El precio recalculado de un capítulo es coste directo (CD), pero el
-            # precio congelado del archivo incluye los costes indirectos. Para
-            # comparar lo mismo con lo mismo, se aplica el CI al CD del capítulo.
-            # Es "agregador" (capítulo o subcapítulo) si su tipo es CAPITULO y al
-            # menos un hijo tiene mediciones o descomposición propia. Así se
-            # excluyen las partidas con descomposición mal clasificadas como
-            # capítulo (todos sus hijos son recursos hoja), cuyo precio de
-            # archivo ya es CD sin CI.
+            # El "precio calculado" con el que se compara el ~C del archivo:
+            #  - CAPÍTULO (agregador): su IMPORTE = suma de los importes de sus
+            #    partidas (cada una con su CI), mismo número que muestra la
+            #    pantalla y que guarda el archivo en el ~C del capítulo. NO se usa
+            #    CD×(1+CI): ese cálculo no existe en ningún otro sitio.
+            #  - PARTIDA (o capítulo mal clasificado con hijos hoja): su coste
+            #    directo, comparado SIN CI (el archivo guarda el coste sin CI).
+            # "Agregador" = CAPITULO con al menos un hijo medido o con
+            # descomposición propia (excluye partidas con desglose mal
+            # clasificadas como capítulo).
             es_agregador = c.tipo == TipoConcepto.CAPITULO and any(
                 (hc := self.conceptos.get(h.codigo_hijo)) and (hc.mediciones or hc.hijos)
                 for h in c.hijos
             )
-            if self.ci_pct and es_agregador:
-                p_calc = p_calc * (1 + self.ci_pct)
+            p_calc = self._importe_recursivo(cod, "") if es_agregador else c.precio
             if es_diferente(p_archivo, p_calc):
                 diff = p_calc - p_archivo
                 denom = max(abs(p_archivo), abs(p_calc))

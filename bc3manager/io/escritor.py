@@ -245,9 +245,19 @@ class EscritorBC3:
         # ceros sobrantes — no truncar precios como 11.00965 (DecPar=5).
         # 6º campo: tipo FIEBDC (0 sin clasif. / 1 MO / 2 maq. / 3 mat.), según
         # norma. Capítulos y partidas son 0; su naturaleza es posicional.
+        precio = c.precio
+        # En el ~C de un CAPÍTULO, Presto guarda su IMPORTE: la suma de los
+        # importes de sus partidas (cada una con su CI). Es el único cálculo de
+        # importe que existe; se escribe SIEMPRE así (con CI=0 el importe no lleva
+        # recargo y sale igual). El precio de capítulo NO interviene en el cálculo
+        # (recalcular suma de abajo arriba): esto solo fija la referencia con la
+        # que el archivo se valida a sí mismo. Antes se escribía el coste sin CI y
+        # la validación lo veía un ~6% por debajo (38 falsas discrepancias).
+        if c.tipo == TipoConcepto.CAPITULO:
+            precio = self.p._importe_recursivo(c.codigo, "")
         tipo = self._tipo_fiebdc_salida(c)
         fecha = getattr(c, "_fecha_bc3", "") or ""
-        return f"~C|{c.codigo}|{c.unidad}|{_escape(c.resumen)}|{_fmt(c.precio, 6)}|{fecha}|{tipo}|"
+        return f"~C|{c.codigo}|{c.unidad}|{_escape(c.resumen)}|{_fmt(precio, 6)}|{fecha}|{tipo}|"
 
     def _reg_D(self, c: Concepto) -> str:
         trozos: list[str] = []
@@ -269,11 +279,15 @@ class EscritorBC3:
                 f"{_fmt_m(ln.n_uds)}\\{_fmt_m(ln.longitud)}\\"
                 f"{_fmt_m(ln.anchura)}\\{_fmt_m(ln.altura)}\\"
             )
-        # Una medición SIN líneas (partida alzada) escribe su total declarado;
-        # con líneas, la suma de las líneas. `medicion.total` es 0 cuando no hay
-        # líneas, así que sin esto la alzada se guardaría con medición 0 (importe
-        # 0 al reabrir) aunque ya no se descarte el registro.
-        total = _fmt(medicion.total if medicion.lineas else medicion.total_declarado, 3)
+        # El total del ~M debe ser el que de verdad usa el cálculo: el total
+        # redondeado como Presto (total_medicion), NO la suma cruda de líneas.
+        #  - Con líneas (~K activo): redondea cada factor/parcial como Presto
+        #    (p.ej. 215.0030 -> 112,21, no la suma cruda 111,326), evitando que
+        #    el número-resumen del ~M se contradiga con sus propias líneas.
+        #  - Sin líneas (partida alzada): total_medicion devuelve el total
+        #    declarado (conserva el arreglo de las alzadas).
+        #  - Sin ~K: total_medicion devuelve la suma cruda (sin cambio).
+        total = _fmt(self.p.total_medicion(medicion), 3)
         return f"~M|{relacion}|{posicion}|{total}|{''.join(subcampos)}|"
 
 

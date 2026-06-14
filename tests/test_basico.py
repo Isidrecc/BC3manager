@@ -437,6 +437,43 @@ def test_alqueria_round_trip_conserva_partida_alzada():
     )
 
 
+def test_alqueria_round_trip_validacion_limpia():
+    """Tras guardar y reabrir, la validación debe seguir LIMPIA (0 discrepancias).
+
+    Antes, el escritor escribía el ~C de los capítulos con el coste directo SIN
+    el CI (Presto guarda ahí el importe CON el 6%) y el total de cada ~M como
+    suma cruda en vez del total redondeado como Presto. Tras guardar y reabrir,
+    la validación saltaba de 0 a 38 discrepancias de precio + 2 de medición, y el
+    hueco de PEM archivo-vs-calculado pasaba de +0,41 a ~+512.000 €. Ahora el
+    ciclo guardar→reabrir deja la validación a 0 discrepancias y el PEM cuadrado."""
+    if not os.path.exists(ALQUERIA):
+        return
+    p1 = leer_bc3(ALQUERIA)
+    # Precondición: el original está limpio
+    v1 = p1.validar_completo()
+    assert len(v1["precios"]) == 0 and len(v1["mediciones"]) == 0
+    with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
+        salida = tmp.name
+    try:
+        escribir_bc3(p1, salida)
+        p2 = leer_bc3(salida)
+    finally:
+        os.unlink(salida)
+    v2 = p2.validar_completo()
+    assert len(v2["precios"]) == 0, (
+        f"tras guardar aparecen {len(v2['precios'])} discrepancias de precio: "
+        f"{[(d['codigo'], d['diferencia_pct']) for d in v2['precios'][:3]]}"
+    )
+    assert len(v2["mediciones"]) == 0, (
+        f"tras guardar aparecen {len(v2['mediciones'])} discrepancias de medición: "
+        f"{[(d['codigo'], d['diferencia']) for d in v2['mediciones'][:3]]}"
+    )
+    comp = p2.comparar_importes_archivo()
+    assert abs(comp["diferencia_pem"]) < 0.01, (
+        f"hueco de PEM archivo-vs-calc tras guardar: {comp['diferencia_pem']:,.2f}"
+    )
+
+
 def test_alqueria_sin_discrepancias_y_pem():
     """Con todo bien leído del ~K, no debe haber discrepancias de precio ni de
     medición, y el PEM debe quedar a < 0,05% del valor congelado del archivo."""
