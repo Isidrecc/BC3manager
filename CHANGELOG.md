@@ -5,6 +5,41 @@ y las reglas que NO hay que romper, ver `CLAUDE.md` (invariantes 5-7).
 
 ---
 
+## 2026-06 — Batería de tests paramétrica sobre archivos reales (test)
+
+Se implementa el diseño de `docs/auditoria/bateria-tests.md`. `tests/test_basico.py`
+pasa de 27 tests clavados a mano a tres familias sobre un **corpus de 6 BC3 reales**
+(Alquería, SONFONT, REDONDEO y los tres de Andratx): **paramétricos** (`param_*`,
+la misma comprobación sobre cada archivo: lectura, referencias, recálculo
+determinista, round-trip, conservación del `~K`…), **línea base** (PEM y nº de
+discrepancias de cada archivo, como regresión) y **dirigidos** (valores exactos
+contra un archivo concreto). Nuevos `test_edit_*`: primera cobertura de la capa
+web (edición, autoguardado, undo/redo).
+
+Las discrepancias de precio de los archivos de Andratx (29, 3 y 35) se fijan como
+**línea base, no como fallo**: son hallazgos conocidos —el PEM del archivo no
+cuadra con el recalculado de abajo arriba— pendientes de investigar. No se
+"arreglan" relajando el test.
+
+Nota: se añadió `from __future__ import annotations` a `tests/test_basico.py`
+para que las anotaciones `X | None` funcionen en el Python 3.9 del entorno, como
+ya hace el resto del repo.
+
+---
+
+## 2026-06 — Diseño de la batería de tests (docs)
+
+Nuevo `docs/auditoria/bateria-tests.md`: diseño de una estrategia de tests
+**paramétrica** (la misma batería de comprobaciones sobre muchos `.bc3` reales)
+para cazar los problemas conocidos (registro-bugs nº 1-18) en cada archivo, en vez
+de clavar valores a mano archivo por archivo. Define tres familias de tests
+(paramétricos P1-P18, dirigidos de regresión, y edición/autoguardado E1-E12 — la
+capa web hoy sin cobertura), una "lista de la compra" de qué archivos pedir para
+activar cada bug, una propuesta sobre `ejemplo_son_font.bc3`, y el orden de
+implementación. Es diseño; implementarlo será una sesión de código.
+
+---
+
 ## 2026-06 — Cobertura de tests al día (docs)
 
 `docs/auditoria/estado-tests.md` pasa de la foto del 2026-06-11 (25/25) a

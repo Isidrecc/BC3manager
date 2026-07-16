@@ -1,8 +1,11 @@
 # Estado y cobertura de los tests
 
-> **Documento vivo.** Mapa de qué prueba cada test, contra qué archivos lo hace,
-> qué se debe correr tras cada cambio y qué queda sin cubrir. Esto es solo
+> **Documento vivo.** Mapa de qué prueba cada test **hoy**, contra qué archivos lo
+> hace, qué se debe correr tras cada cambio y qué queda sin cubrir. Esto es solo
 > documentación: no se ha tocado ningún test.
+> El **rediseño** propuesto (batería paramétrica sobre un corpus de varios
+> archivos) vive en [bateria-tests.md](bateria-tests.md); este doc se reescribirá
+> cuando aquel se implemente.
 > Última revisión: **2026-06-14 — 27/27 OK** (`python tests/test_basico.py`).
 > Origen: auditoría de solo lectura del 2026-06-11 (entonces eran 25/25).
 

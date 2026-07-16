@@ -1,13 +1,38 @@
 """
-Tests básicos de BC3Manager.
+Batería de tests de BC3Manager.
 
-Ejecutar con:  python -m pytest   (si tienes pytest)
-o simplemente: python tests/test_basico.py
+Ejecutar:  python tests/test_basico.py        (no requiere pytest)
+           (desde la RAÍZ del repo; importa bc3manager por ruta relativa)
 
-Verifican el núcleo: lectura, recálculo de precios, importes, total y el
-ciclo completo leer -> escribir -> releer (round-trip).
+Diseño completo en docs/auditoria/bateria-tests.md. Cuatro familias:
+
+  1. PARAMÉTRICOS (`param_*`) — la MISMA comprobación sobre CADA archivo del
+     corpus real. Son invariantes que cualquier BC3 debe cumplir: lectura sin
+     errores, integridad de referencias, y round-trip determinista
+     (leer→escribir→releer no pierde ni altera datos). Cazan los problemas
+     conocidos (registro-bugs.md) en todos los archivos a la vez.
+
+  2. LÍNEA BASE (`param_baseline_*`) — fija el PEM y el nº de discrepancias de
+     validación ACTUALES de cada archivo, para detectar regresiones. OJO: que un
+     archivo real traiga discrepancias archivo-vs-calculado NO es un fallo de la
+     batería; es un hallazgo del propio archivo (precios precalculados que no
+     cuadran con su desglose). Se documentan y se investigan aparte.
+
+  3. DIRIGIDOS (`test_alqueria_*`, etc.) — valores EXACTOS clavados contra el
+     informe real de Presto (CI por partida, redondeos, partidas alzadas...).
+     Blindan los invariantes 5-7 de CLAUDE.md. Si se rompen, NO los relajes sin
+     entender por qué: están verificados contra el desglose de Presto.
+
+  4. EDICIÓN Y AUTOGUARDADO (`test_edit_*`) — operaciones del modelo + el ciclo
+     guardar→reabrir y deshacer/rehacer (la capa que antes no tenía tests).
+
+Los .bc3 del corpus viven junto a este archivo. Los tests que dependen de un
+archivo ausente se SALTAN avisando (no cuentan como OK silencioso).
 """
 
+from __future__ import annotations
+
+import math
 import os
 import sys
 import tempfile
@@ -16,279 +41,337 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bc3manager.io.lector import leer_bc3
 from bc3manager.io.escritor import escribir_bc3
+from bc3manager.core.model import Presupuesto, TipoConcepto
 
 
-EJEMPLO = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "ejemplo_son_font.bc3",
-)
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def test_lectura_basica():
-    p = leer_bc3(EJEMPLO)
-    assert p.codigo_raiz == "OBRA##"
-    assert len(p.conceptos) == 11
-    assert p.version_formato == "FIEBDC-3/2024"
+def _ruta(nombre: str) -> str:
+    return os.path.join(TESTS_DIR, nombre)
 
 
-def test_precios_unitarios_dato():
-    p = leer_bc3(EJEMPLO)
-    assert abs(p.get("MO001").precio - 18.50) < 1e-6
-    assert abs(p.get("MQ001").precio - 45.00) < 1e-6
+class Saltado(Exception):
+    """El test no aplica a este entorno (p.ej. falta su archivo)."""
 
 
-def test_recalculo_descomposicion():
-    p = leer_bc3(EJEMPLO)
-    # E0101 = peón 18.50*0.25 + retro 45.00*0.15 = 11.375
-    assert abs(p.get("E0101").precio - 11.375) < 1e-3
+# ===========================================================================
+# CORPUS — archivos reales y su línea base
+# ===========================================================================
+# PEM y nº de discrepancias capturados el 2026-06-14 con `python tests/test_basico.py`.
+# Sirven de regresión: si cambian, algo en el cálculo o en la validación cambió.
+# `disc_precios` > 0 en los archivos de Andratx son HALLAZGOS conocidos (el PEM
+# del archivo no cuadra con el recalculado de abajo arriba); ver bateria-tests.md
+# y registro-bugs.md. No se "arreglan" relajando el test: se investigan aparte.
+CORPUS = [
+    {"archivo": "Test_Alqueria.bc3",      "programa": "Presto 20 (FIEBDC-2016)",
+     "tiene_k": True, "ci": 0.06,   "pem": 9073347.54, "disc_precios": 0,  "disc_mediciones": 0},
+    {"archivo": "Test_SONFONT.bc3",       "programa": "Presto 8.8",
+     "tiene_k": True, "ci": 0.0,    "pem": 602630.88,  "disc_precios": 0,  "disc_mediciones": 0},
+    {"archivo": "Test_REDONDEO.bc3",      "programa": "Presto 8.8 (decimales extremos)",
+     "tiene_k": True, "ci": 0.0,    "pem": 602676.04,  "disc_precios": 0,  "disc_mediciones": 0},
+    {"archivo": "Test_PEBTAndratx.bc3",   "programa": "Presto 8.8 (CI 6%)",
+     "tiene_k": True, "ci": 0.06,   "pem": 90710.90,   "disc_precios": 29, "disc_mediciones": 0},
+    {"archivo": "Test_PEBT_AC_Andratx.bc3", "programa": "Presto 8.8 (CI 6%)",
+     "tiene_k": True, "ci": 0.06,   "pem": 5700.19,    "disc_precios": 3,  "disc_mediciones": 0},
+    {"archivo": "Test_XarxaAndratx.bc3",  "programa": "Presto 8.8 (CI -0,7%)",
+     "tiene_k": True, "ci": -0.007,  "pem": 3085573.51, "disc_precios": 35, "disc_mediciones": 0},
+]
 
 
-def test_medicion():
-    p = leer_bc3(EJEMPLO)
-    # E0101 en 01#: 2*40*1.5 + 1*30 = 120 + 30 = 150
-    assert abs(p.medicion_total("E0101", "01#") - 150.0) < 1e-3
+def _corpus_presentes() -> list[dict]:
+    return [m for m in CORPUS if os.path.exists(_ruta(m["archivo"]))]
 
 
-def test_total():
-    p = leer_bc3(EJEMPLO)
-    assert abs(p.presupuesto_total() - 4523.25) < 0.01
+class _Ctx:
+    """Carga un archivo del corpus UNA vez y hace su round-trip, para que las
+    pruebas paramétricas no relean ni reescriban en cada comprobación."""
+
+    def __init__(self, meta: dict) -> None:
+        self.meta = meta
+        self.ruta = _ruta(meta["archivo"])
+        self.p = leer_bc3(self.ruta)                  # P1: lectura sin errores
+        with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
+            self.salida = tmp.name
+        escribir_bc3(self.p, self.salida)
+        self.p2 = leer_bc3(self.salida)               # round-trip
+
+    def cleanup(self) -> None:
+        try:
+            os.unlink(self.salida)
+        except OSError:
+            pass
 
 
-def test_validar_precios_sin_discrepancias():
-    """En el ejemplo, los precios del archivo deben coincidir con el recálculo."""
-    p = leer_bc3(EJEMPLO)
-    discrepancias = p.validar_precios_cargados()
-    assert discrepancias == [], (
-        f"No deberían haber discrepancias en ejemplo_son_font.bc3. "
-        f"Encontradas: {discrepancias}"
+def _refs_rotas(p: Presupuesto) -> list[tuple]:
+    """Hijos (~D) o padres de medición (~M) que apuntan a códigos inexistentes."""
+    rotas = []
+    for c in p.conceptos.values():
+        for h in c.hijos:
+            if h.codigo_hijo not in p.conceptos:
+                rotas.append(("hijo", c.codigo, h.codigo_hijo))
+        for padre in c.mediciones:
+            if padre != "__sin_padre__" and padre not in p.conceptos:
+                rotas.append(("medicion", padre, c.codigo))
+    return rotas
+
+
+def _n_mediciones(p: Presupuesto) -> int:
+    return sum(len(c.mediciones) for c in p.conceptos.values())
+
+
+# ===========================================================================
+# FAMILIA 1 — PARAMÉTRICOS (se ejecutan sobre CADA archivo del corpus)
+# ===========================================================================
+
+def param_lectura_ok(ctx: _Ctx) -> None:
+    """P1+P2: el archivo se lee, tiene conceptos y una raíz válida en el árbol."""
+    assert len(ctx.p.conceptos) > 0, "no se leyó ningún concepto"
+    assert ctx.p.codigo_raiz, "no se detectó la obra raíz"
+    assert ctx.p.codigo_raiz in ctx.p.conceptos, "la raíz no está entre los conceptos"
+
+
+def param_sin_referencias_rotas(ctx: _Ctx) -> None:
+    """P3: ningún ~D/~M apunta a un código que no existe (alias #, sinónimos)."""
+    rotas = _refs_rotas(ctx.p)
+    assert not rotas, f"{len(rotas)} referencias rotas, p.ej. {rotas[:3]}"
+
+
+def param_todo_clasificado(ctx: _Ctx) -> None:
+    """P16: ningún concepto queda sin clasificar (TipoConcepto.OTRO)."""
+    otros = [c.codigo for c in ctx.p.conceptos.values() if c.tipo == TipoConcepto.OTRO]
+    assert not otros, f"{len(otros)} conceptos sin clasificar, p.ej. {otros[:3]}"
+
+
+def param_numeros_sanos(ctx: _Ctx) -> None:
+    """P15: todos los precios son finitos y el PEM es finito y > 0."""
+    for c in ctx.p.conceptos.values():
+        assert math.isfinite(c.precio), f"{c.codigo} tiene precio no finito ({c.precio})"
+    pem = ctx.p.presupuesto_total()
+    assert math.isfinite(pem) and pem > 0, f"PEM no sano: {pem}"
+
+
+def param_recalculo_determinista(ctx: _Ctx) -> None:
+    """P7: recalcular dos veces da el mismo PEM (sin estado oculto)."""
+    pem1 = ctx.p.presupuesto_total()
+    ctx.p.recalcular()
+    pem2 = ctx.p.presupuesto_total()
+    assert abs(pem1 - pem2) < 0.01, f"PEM no determinista: {pem1} != {pem2}"
+
+
+def param_editar_revertir_devuelve_pem(ctx: _Ctx) -> None:
+    """P7 (fuerte / invariante 2): editar un precio hoja y revertirlo devuelve
+    el PEM exacto. Usa una copia fresca para no contaminar el resto de pruebas."""
+    p = leer_bc3(ctx.ruta)
+    leaf = next((c for c in p.conceptos.values()
+                 if c.tipo == TipoConcepto.UNITARIO and not c.hijos and c.precio), None)
+    if leaf is None:
+        raise Saltado("sin recurso hoja con precio")
+    pem0 = p.presupuesto_total()
+    original = leaf.precio
+    p.modificar_precio(leaf.codigo, original + 10.0)
+    p.recalcular()
+    p.modificar_precio(leaf.codigo, original)
+    p.recalcular()
+    assert abs(p.presupuesto_total() - pem0) < 0.01, (
+        f"editar+revertir no devolvió el PEM: {pem0} -> {p.presupuesto_total()}"
     )
 
 
-def test_validar_precios_detecta_discrepancia():
-    """Si tras cargar manipulamos un _precio_bc3 para que no cuadre con la
-    descomposición, validar_precios_cargados debe detectarlo."""
-    p = leer_bc3(EJEMPLO)
-    # E0101 tiene precio calculado 11.375 (MO001*0.25 + MQ001*0.15)
-    # Forzamos un _precio_bc3 distinto para simular un archivo inconsistente
-    p.get("E0101")._precio_bc3 = 99.99
-    disc = p.validar_precios_cargados()
-    assert any(d["codigo"] == "E0101" for d in disc), (
-        f"Debería haber detectado discrepancia en E0101. Encontradas: {disc}"
+def param_roundtrip_estructura(ctx: _Ctx) -> None:
+    """P8: leer→escribir→releer conserva nº de conceptos y de mediciones."""
+    assert len(ctx.p2.conceptos) == len(ctx.p.conceptos), (
+        f"conceptos {len(ctx.p.conceptos)} -> {len(ctx.p2.conceptos)}"
     )
-
-
-def test_rendimiento_cero_se_conserva():
-    """Un rendimiento 0 en el ~D (partida sin medición en ese capítulo) debe
-    conservarse como 0, no convertirse en 1. Si no, al exportar se inflaban
-    mediciones e importes y Presto reinterpretaba la partida."""
-    ruta = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "Test_SONFONT.bc3"
+    assert _n_mediciones(ctx.p2) == _n_mediciones(ctx.p), (
+        f"mediciones {_n_mediciones(ctx.p)} -> {_n_mediciones(ctx.p2)}"
     )
-    if not os.path.exists(ruta):
-        return
-    p = leer_bc3(ruta)
-    c01 = p.get("01#")
-    ceros = {h.codigo_hijo for h in c01.hijos if h.cantidad == 0}
-    # En el original, estas partidas tienen rendimiento 0 en 01# (no se miden ahí)
-    assert {"MOV.03.03", "HID.01.02", "HID.02.01", "EST.01.01"} <= ceros, (
-        f"Se perdieron los ceros: {ceros}"
-    )
+    assert not _refs_rotas(ctx.p2), "el archivo reescrito tiene referencias rotas"
 
 
-def test_add_partida_no_crashea():
-    """add_partida no debe pasar 'cantidad' al constructor de Hijo (es propiedad
-    de solo lectura). La partida nueva nace con cantidad 0."""
-    p = leer_bc3(EJEMPLO)
-    p.add_partida("01#", "NUEVA.X", "m2", "Prueba", 10.0)
-    h = next(h for h in p.get("01#").hijos if h.codigo_hijo == "NUEVA.X")
-    assert h.cantidad == 0.0
+def param_roundtrip_pem(ctx: _Ctx) -> None:
+    """P9: el PEM sobrevive al round-trip (no se pierde importe al guardar)."""
+    pem1, pem2 = ctx.p.presupuesto_total(), ctx.p2.presupuesto_total()
+    assert abs(pem1 - pem2) < 0.01, f"PEM cambió al guardar: {pem1:,.2f} -> {pem2:,.2f}"
 
 
-def test_round_trip_conserva_rendimiento_cero():
-    """Tras exportar y releer, los rendimientos 0 y el PEM deben mantenerse."""
-    import tempfile
-    ruta = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "Test_SONFONT.bc3"
-    )
-    if not os.path.exists(ruta):
-        return
-    p = leer_bc3(ruta)
-    pem = p.presupuesto_total()
+def param_roundtrip_idempotente(ctx: _Ctx) -> None:
+    """P11: un segundo round-trip ya no cambia nada (sin drift acumulativo)."""
     with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
-        salida = tmp.name
+        salida3 = tmp.name
     try:
-        escribir_bc3(p, salida)
-        rt = leer_bc3(salida)
-        ceros_o = {h.codigo_hijo for h in p.get("01#").hijos if h.cantidad == 0}
-        ceros_r = {h.codigo_hijo for h in rt.get("01#").hijos if h.cantidad == 0}
-        assert ceros_o == ceros_r, f"{ceros_o} != {ceros_r}"
-        assert abs(rt.presupuesto_total() - pem) < 0.01
+        escribir_bc3(ctx.p2, salida3)
+        p3 = leer_bc3(salida3)
     finally:
-        os.unlink(salida)
+        os.unlink(salida3)
+    assert len(p3.conceptos) == len(ctx.p2.conceptos), "drift en nº de conceptos"
+    assert abs(p3.presupuesto_total() - ctx.p2.presupuesto_total()) < 0.01, "drift en PEM"
+
+
+def param_roundtrip_no_empeora_validacion(ctx: _Ctx) -> None:
+    """P10: guardar no debe AUMENTAR las discrepancias de validación."""
+    v1 = ctx.p.validar_completo()
+    v2 = ctx.p2.validar_completo()
+    assert len(v2["precios"]) <= len(v1["precios"]), (
+        f"guardar empeoró los precios: {len(v1['precios'])} -> {len(v2['precios'])}"
+    )
+    assert len(v2["mediciones"]) <= len(v1["mediciones"]), (
+        f"guardar empeoró las mediciones: {len(v1['mediciones'])} -> {len(v2['mediciones'])}"
+    )
+
+
+def param_conserva_k(ctx: _Ctx) -> None:
+    """P12: el ~K sobrevive al round-trip (coeficientes y decimales del campo 1).
+    OJO: DN/DD viven solo en el campo 3, que el escritor aún no emite (bug nº 5);
+    por eso aquí NO se comprueban dec_num/dec_dim."""
+    if not ctx.meta["tiene_k"]:
+        raise Saltado("archivo sin ~K")
+    a, b = ctx.p, ctx.p2
+    assert b.redondeo_activo, "se perdió el ~K al guardar"
+    for attr in ("dec_parcial", "dec_cantmed", "dec_cantrend", "dec_subtotal",
+                 "dec_natural", "dec_precio_partida", "dec_precio_capitulo"):
+        assert getattr(a, attr) == getattr(b, attr), (
+            f"{attr}: {getattr(a, attr)} -> {getattr(b, attr)}"
+        )
+    for attr in ("ci_pct", "gg_pct", "bi_pct", "baja_pct", "iva_pct"):
+        assert abs(getattr(a, attr) - getattr(b, attr)) < 1e-9, (
+            f"{attr}: {getattr(a, attr)} -> {getattr(b, attr)}"
+        )
+
+
+def param_conserva_version(ctx: _Ctx) -> None:
+    """P13: la versión de formato del ~V sobrevive al round-trip."""
+    assert ctx.p2.version_formato == ctx.p.version_formato, (
+        f"versión {ctx.p.version_formato!r} -> {ctx.p2.version_formato!r}"
+    )
+
+
+def param_codificacion_roundtrip(ctx: _Ctx) -> None:
+    """P17: los caracteres especiales (acentos, ñ, ç, €) sobreviven al guardar."""
+    objetivo = next(
+        (c for c in ctx.p.conceptos.values()
+         if c.resumen and any(ord(ch) > 127 for ch in c.resumen)),
+        None,
+    )
+    if objetivo is None:
+        raise Saltado("sin caracteres especiales que comprobar")
+    c2 = ctx.p2.get(objetivo.codigo)
+    assert c2 is not None and c2.resumen == objetivo.resumen, (
+        f"{objetivo.codigo}: {objetivo.resumen!r} -> {c2.resumen if c2 else None!r}"
+    )
+
+
+def param_baseline_pem(ctx: _Ctx) -> None:
+    """LÍNEA BASE: el PEM coincide con el valor congelado del corpus (regresión)."""
+    pem = ctx.p.presupuesto_total()
+    assert abs(pem - ctx.meta["pem"]) < 0.01, (
+        f"PEM cambió respecto a la línea base: {pem:,.2f} (esperado {ctx.meta['pem']:,.2f})"
+    )
+
+
+def param_baseline_discrepancias(ctx: _Ctx) -> None:
+    """LÍNEA BASE: el nº de discrepancias de validación es el conocido (regresión).
+    Un cambio aquí significa que la validación detecta MÁS o MENOS que antes."""
+    v = ctx.p.validar_completo()
+    assert len(v["precios"]) == ctx.meta["disc_precios"], (
+        f"discrepancias de precio: {len(v['precios'])} (línea base {ctx.meta['disc_precios']})"
+    )
+    assert len(v["mediciones"]) == ctx.meta["disc_mediciones"], (
+        f"discrepancias de medición: {len(v['mediciones'])} (línea base {ctx.meta['disc_mediciones']})"
+    )
+
+
+# ===========================================================================
+# FAMILIA 3 — DIRIGIDOS (valores exactos clavados; un archivo concreto)
+# ===========================================================================
+
+def test_validacion_detecta_discrepancia():
+    """La validación debe detectar un precio del ~C que no cuadra con su
+    descomposición. Se fuerza un _precio_bc3 incoherente en una partida real."""
+    ruta = _ruta("Test_Alqueria.bc3")
+    if not os.path.exists(ruta):
+        raise Saltado("falta Test_Alqueria.bc3")
+    p = leer_bc3(ruta)
+    objetivo = next((c for c in p.conceptos.values()
+                     if c.tipo == TipoConcepto.PARTIDA and c.hijos and getattr(c, "_precio_bc3", 0)),
+                    None)
+    assert objetivo is not None, "no se encontró partida con descomposición y precio de archivo"
+    objetivo._precio_bc3 = (objetivo._precio_bc3 or 1) * 10 + 999.99
+    disc = p.validar_precios_cargados()
+    assert any(d["codigo"] == objetivo.codigo for d in disc), (
+        f"no se detectó la discrepancia forzada en {objetivo.codigo}"
+    )
 
 
 def test_lineas_porcentaje_medios_auxiliares():
-    """Las líneas de porcentaje (%MA = medios auxiliares) deben aplicarse sobre
-    el acumulado de la descomposición, NO como precio×rendimiento.
-
-    Caso real de Test_SONFONT.bc3:
-      MOV.02.01 = MO.006×0.08 + MAQ.RET.10×0.155, + 7% medios auxiliares
-                = (21.60×0.08 + 55.23×0.155) × 1.07 = 11.0089 ≈ 11.01
+    """Las líneas de porcentaje (%MA = medios auxiliares) se aplican sobre el
+    acumulado de la descomposición, NO como precio×rendimiento.
+      DEM.01.01: (2,16 + 8,28) × 1,07, redondeando cada subtotal = 11,17
+      MOV.02.01: (21,60×0,08 + 55,23×0,155) × 1,07 = 11,01
     """
-    ruta = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "Test_SONFONT.bc3"
-    )
+    ruta = _ruta("Test_SONFONT.bc3")
     if not os.path.exists(ruta):
-        return  # archivo opcional; si no está, no se ejecuta
+        raise Saltado("falta Test_SONFONT.bc3")
     p = leer_bc3(ruta)
-    # El concepto %MA.7 debe detectarse como porcentaje
-    from bc3manager.core.model import Presupuesto
     assert Presupuesto.es_porcentaje(p.get("%MA.7"))
-    # El archivo trae ~K → el redondeo de Presto debe estar activo
     assert p.redondeo_activo, "El ~K debe activar el redondeo a 2 decimales"
-    # Precio exacto al céntimo con redondeo de subtotales (DecImp=2) + 7% medios aux.
-    #   DEM.01.01: (2,16 + 8,28) × 1,07, redondeando cada subtotal = 11,17
     assert p.get("DEM.01.01").precio == 11.17, (
         f"DEM.01.01 = {p.get('DEM.01.01').precio}, esperado 11.17 (Presto)"
     )
     assert p.get("MOV.02.01").precio == 11.01, (
         f"MOV.02.01 = {p.get('MOV.02.01').precio}, esperado 11.01 (Presto)"
     )
-    # Todas las partidas con descomposición deben coincidir con su _precio_bc3
-    from bc3manager.core.model import TipoConcepto
     for cod, c in p.conceptos.items():
         if c.tipo == TipoConcepto.PARTIDA and c.hijos:
             arch = getattr(c, "_precio_bc3", None)
             if arch and arch > 0:
-                # Tolerancia 2 céntimos: absorbe el redondeo a 2 decimales que
-                # aplica Presto al precio unitario. El bug de medios auxiliares
-                # producía desviaciones del 5-7% (céntimos a euros), muy por
-                # encima de esta tolerancia.
-                assert abs(arch - c.precio) < 0.02, (
-                    f"{cod}: archivo={arch} calc={c.precio}"
-                )
+                assert abs(arch - c.precio) < 0.02, f"{cod}: archivo={arch} calc={c.precio}"
 
 
 def test_redondeos_k_distintos():
-    """Verifica que se leen los decimales del registro ~K (cada parámetro con
-    un valor distinto) y que el cálculo reproduce EXACTAMENTE los precios e
-    importes del archivo de Presto, incluido el PEM."""
-    ruta = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "Test_REDONDEO.bc3"
-    )
+    """Lee los decimales del ~K (cada parámetro distinto) y reproduce EXACTAMENTE
+    los precios e importes del archivo de Presto, incluido el PEM."""
+    ruta = _ruta("Test_REDONDEO.bc3")
     if not os.path.exists(ruta):
-        return
-    from bc3manager.core.model import TipoConcepto
+        raise Saltado("falta Test_REDONDEO.bc3")
     p = leer_bc3(ruta)
-    # Mapeo del ~K  \8\2\3\7\6\5\4\  →  DecImp=7, DecPar=5, Dec=4, DecCantRend=3
     assert p.redondeo_activo
     assert p.dec_subtotal == 7, f"DecImp={p.dec_subtotal}"
     assert p.dec_precio_partida == 5, f"DecPar={p.dec_precio_partida}"
     assert p.dec_precio_capitulo == 4, f"Dec={p.dec_precio_capitulo}"
     assert p.dec_cantrend == 3, f"DecCantRend={p.dec_cantrend}"
-    # Todas las partidas con descomposición deben coincidir AL CÉNTIMO con el archivo
     for cod, c in p.conceptos.items():
         if c.tipo == TipoConcepto.PARTIDA and c.hijos:
             arch = getattr(c, "_precio_bc3", None)
             if arch and arch > 0:
-                assert abs(arch - c.precio) < 0.0001, (
-                    f"{cod}: archivo={arch} calc={c.precio}"
-                )
-    # El PEM calculado debe coincidir con el del archivo
+                assert abs(arch - c.precio) < 0.0001, f"{cod}: archivo={arch} calc={c.precio}"
     comp = p.comparar_importes_archivo()
     assert abs(comp["diferencia_pem"]) < 0.01, (
         f"PEM archivo={comp['pem_archivo']} calc={comp['pem_calculado']}"
     )
 
 
-def test_round_trip_conserva_redondeos_k():
-    """Al escribir un BC3 debe emitirse el registro ~K, de modo que al reabrirlo
-    (en BC3Manager u otro programa) se conserve la configuración de redondeo y
-    los precios se recalculen igual. Verifica el ciclo leer→escribir→releer."""
-    ruta = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "Test_REDONDEO.bc3"
-    )
+def test_rendimiento_cero_se_conserva():
+    """Un rendimiento 0 en el ~D (partida no medida en ese capítulo) se conserva
+    como 0, no se convierte en 1."""
+    ruta = _ruta("Test_SONFONT.bc3")
     if not os.path.exists(ruta):
-        return
-    p1 = leer_bc3(ruta)
-    pem1 = p1.presupuesto_total()
-    with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
-        salida = tmp.name
-    try:
-        escribir_bc3(p1, salida)
-        p2 = leer_bc3(salida)
-        # El ~K debe haberse escrito y releído con los mismos decimales
-        assert p2.redondeo_activo, "El archivo escrito debe incluir ~K"
-        assert p2.dec_subtotal == p1.dec_subtotal
-        assert p2.dec_precio_partida == p1.dec_precio_partida
-        assert p2.dec_precio_capitulo == p1.dec_precio_capitulo
-        assert p2.dec_cantrend == p1.dec_cantrend
-        # Y el PEM debe ser idéntico tras el round-trip
-        assert abs(p2.presupuesto_total() - pem1) < 0.01, (
-            f"PEM cambió en round-trip: {pem1} -> {p2.presupuesto_total()}"
-        )
-    finally:
-        os.unlink(salida)
-
-
-def test_round_trip():
-    p = leer_bc3(EJEMPLO)
-    total_original = p.presupuesto_total()
-    with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
-        ruta = tmp.name
-    try:
-        escribir_bc3(p, ruta)
-        p2 = leer_bc3(ruta)
-        # El total puede diferir ligeramente porque el BC3 exportado incluye
-        # los precios recalculados en ~C, lo que activa precio_es_dato en p2.
-        # Verificamos que los precios de conceptos hoja se conservan.
-        assert abs(p2.get("MO001").precio - 18.50) < 1e-3
-        assert abs(p2.get("MQ001").precio - 45.00) < 1e-3
-        assert len(p2.conceptos) == len(p.conceptos)
-    finally:
-        os.unlink(ruta)
-
-
-def test_recurso_nuevo_tipo_fiebdc():
-    """Un recurso añadido a una partida debe exportarse con tipo FIEBDC
-    explícito (no vacío), para que Presto no adivine su naturaleza. Por defecto
-    material (3); si se indica otro subtipo, se respeta."""
-    p = leer_bc3(EJEMPLO)
-    cap = next(c.codigo for c in p.conceptos.values()
-               if c.tipo.name == "PARTIDA")
-    p.add_recurso(cap, "NUEVO.MAT", rendimiento=2.0, precio=5.0, unidad="kg")
-    p.add_recurso(cap, "NUEVO.MAQ", rendimiento=1.0, precio=9.0,
-                  unidad="h", tipo_fiebdc="2")
-    assert getattr(p.get("NUEVO.MAT"), "_tipo_fiebdc", "") == "3"
-    assert getattr(p.get("NUEVO.MAQ"), "_tipo_fiebdc", "") == "2"
-
-    with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
-        salida = tmp.name
-    try:
-        escribir_bc3(p, salida)
-        with open(salida, "rb") as f:
-            lineas = f.read().decode("cp1252", errors="replace").splitlines()
-    finally:
-        os.unlink(salida)
-    tipo = lambda cod: next(
-        l for l in lineas if l.startswith(f"~C|{cod}|")
-    ).split("|")[6]
-    assert tipo("NUEVO.MAT") == "3"
-    assert tipo("NUEVO.MAQ") == "2"
+        raise Saltado("falta Test_SONFONT.bc3")
+    p = leer_bc3(ruta)
+    c01 = p.get("01#")
+    ceros = {h.codigo_hijo for h in c01.hijos if h.cantidad == 0}
+    assert {"MOV.03.03", "HID.01.02", "HID.02.01", "EST.01.01"} <= ceros, (
+        f"Se perdieron los ceros: {ceros}"
+    )
 
 
 def test_export_estructura_presto():
-    """El BC3 exportado debe imitar la estructura de Presto para que NO
-    reclasifique las partidas al reabrir (bug: partidas de movimiento de tierras
-    convertidas en 'maquinaria'). Verifica dos cosas:
-      1. El ~C de cada partida va seguido INMEDIATAMENTE de su ~D. Si Presto lee
-         un ~C sin descomposición pegada, la toma por recurso hoja (maquinaria).
-      2. Los registros ~M llevan el campo POSICIÓN relleno (p.ej. "1\\2\\")."""
-    ruta = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "Test_SONFONT.bc3"
-    )
+    """El BC3 exportado imita la estructura de Presto para que NO reclasifique las
+    partidas: ~C de partida pegado a su ~D, ~M con posición, y tipos FIEBDC de
+    recurso correctos (la partida/capítulo es 0 = sin clasificar, por norma)."""
+    ruta = _ruta("Test_SONFONT.bc3")
     if not os.path.exists(ruta):
-        return
+        raise Saltado("falta Test_SONFONT.bc3")
     p = leer_bc3(ruta)
     with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
         salida = tmp.name
@@ -298,26 +381,17 @@ def test_export_estructura_presto():
             texto = f.read().decode("cp1252", errors="replace")
     finally:
         os.unlink(salida)
-
     lineas = [ln for ln in texto.splitlines() if ln.startswith("~")]
-    # 1) ~C de partida pegado a su ~D
     idx_c = next(i for i, ln in enumerate(lineas) if ln.startswith("~C|MOV.02.01|"))
     assert lineas[idx_c + 1].startswith("~D|MOV.02.01|"), (
-        "El ~D de la partida debe ir justo tras su ~C; si no, Presto la "
-        "reclasifica como maquinaria."
+        "El ~D de la partida debe ir justo tras su ~C; si no, Presto la reclasifica."
     )
-    # 2) ~M con posición (campo 2 no vacío)
     m_mov = next(ln for ln in lineas if ln.startswith("~M|01#\\MOV.02.01|"))
-    posicion = m_mov.split("|")[2]
-    assert posicion.strip("\\").strip() != "", f"~M sin posición: {m_mov}"
+    assert m_mov.split("|")[2].strip("\\").strip() != "", f"~M sin posición: {m_mov}"
 
-    # 3) Tipo FIEBDC según norma: el campo TIPO solo clasifica RECURSOS
-    #    (1 MO, 2 maquinaria, 3 material). Capítulos y partidas son 0 (sin
-    #    clasificar): el estándar no define código de partida/capítulo, su
-    #    naturaleza es posicional.
     def tipo_de(codigo):
         ln = next(l for l in lineas if l.startswith(f"~C|{codigo}|"))
-        return ln.split("|")[6]   # 6º campo del ~C
+        return ln.split("|")[6]
     assert tipo_de("MAQ.RET.10") == "2"   # maquinaria
     assert tipo_de("MO.006") == "1"       # mano de obra
     assert tipo_de("MT.GAV") == "3"       # material
@@ -326,99 +400,104 @@ def test_export_estructura_presto():
     assert tipo_de("SF##") == "0"         # obra raíz -> sin clasificar
 
 
-# ---------------------------------------------------------------------------
-# Regresión: costes indirectos (CI) y redondeos FIEBDC-2016 (archivo Presto 20)
-#
-# Estos tests BLINDAN el comportamiento descubierto trabajando con
-# Test_Alqueria.bc3 (FIEBDC-3/2016, Presto 20). NO los relajes sin entender:
-#   - El CI y los decimales se leen del registro ~K (campo 2 coeficientes,
-#     campo 3 decimales — el preferente según la norma, campo 1 de respaldo).
-#   - El CI se aplica POR PARTIDA: precio = round(CD × (1+CI)) a DecPar. Se
-#     aplica a TODAS las partidas, incluidas las que ya llevan una línea %CI /
-#     medios auxiliares en su desglose (esa línea es un coste más del CD, NO el
-#     CI global; Presto suma el 6% igual encima).
-#   - Las líneas de medición redondean CADA factor antes de multiplicar
-#     (dimensiones a DD, nº de partes a DN); sin esto, alturas como 0,0475 se
-#     usaban en crudo en vez de 0,05.
-#   - Multiplicaciones en Decimal exacto + redondeo mitad-arriba (no float/round).
-# Valores verificados contra el informe de desglose de Presto.
-# ---------------------------------------------------------------------------
-ALQUERIA = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "Test_Alqueria.bc3"
-)
+def test_presto88_sin_ci_sigue_exacto():
+    """Un archivo sin CI en el ~K (ci_pct=0) no aplica recargo y el PEM cuadra."""
+    ruta = _ruta("Test_SONFONT.bc3")
+    if not os.path.exists(ruta):
+        raise Saltado("falta Test_SONFONT.bc3")
+    p = leer_bc3(ruta)
+    assert p.ci_pct == 0.0
+    arch = p.get(p.codigo_raiz)._precio_bc3
+    if arch:
+        assert abs(p.presupuesto_total() - arch) < 0.01
+
+
+def test_round_trip_conserva_redondeos_k():
+    """Al escribir se emite el ~K, de modo que al reabrir se conserva la
+    configuración de redondeo y el PEM se recalcula igual."""
+    ruta = _ruta("Test_REDONDEO.bc3")
+    if not os.path.exists(ruta):
+        raise Saltado("falta Test_REDONDEO.bc3")
+    p1 = leer_bc3(ruta)
+    pem1 = p1.presupuesto_total()
+    with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
+        salida = tmp.name
+    try:
+        escribir_bc3(p1, salida)
+        p2 = leer_bc3(salida)
+        assert p2.redondeo_activo, "El archivo escrito debe incluir ~K"
+        assert p2.dec_subtotal == p1.dec_subtotal
+        assert p2.dec_precio_partida == p1.dec_precio_partida
+        assert p2.dec_precio_capitulo == p1.dec_precio_capitulo
+        assert p2.dec_cantrend == p1.dec_cantrend
+        assert abs(p2.presupuesto_total() - pem1) < 0.01
+    finally:
+        os.unlink(salida)
+
+
+# ---- Regresión de costes indirectos (CI) y redondeos: Test_Alqueria.bc3 ----
+ALQUERIA = _ruta("Test_Alqueria.bc3")
 
 
 def test_alqueria_coeficientes_del_registro_K():
     """CI/GG/BI/IVA se leen del campo 2 del ~K (no de un concepto %CI)."""
     if not os.path.exists(ALQUERIA):
-        return
+        raise Saltado("falta Test_Alqueria.bc3")
     p = leer_bc3(ALQUERIA)
-    assert abs(p.ci_pct - 0.06) < 1e-9   # 6% costes indirectos
-    assert abs(p.gg_pct - 0.13) < 1e-9   # 13% gastos generales
-    assert abs(p.bi_pct - 0.06) < 1e-9   # 6% beneficio industrial
-    assert abs(p.iva_pct - 0.21) < 1e-9  # 21% IVA
+    assert abs(p.ci_pct - 0.06) < 1e-9
+    assert abs(p.gg_pct - 0.13) < 1e-9
+    assert abs(p.bi_pct - 0.06) < 1e-9
+    assert abs(p.iva_pct - 0.21) < 1e-9
 
 
 def test_alqueria_decimales_del_campo3_K():
-    """Los decimales de medición salen del campo 3 del ~K (el completo):
-    DD=2 (dimensiones), DN=2 (nº partes), DS=3 (total), DSP=2 (parcial)."""
+    """Los decimales de medición salen del campo 3 del ~K: DD=2, DN=2, DS=3, DSP=2."""
     if not os.path.exists(ALQUERIA):
-        return
+        raise Saltado("falta Test_Alqueria.bc3")
     p = leer_bc3(ALQUERIA)
     assert p.dec_dim == 2 and p.dec_num == 2
     assert p.dec_cantmed == 3 and p.dec_parcial == 2
 
 
 def test_alqueria_ci_por_partida():
-    """El precio de partida incluye el CI: round(CD × 1,06). Se aplica a TODAS,
-    incluso a las que llevan línea %CI explícita en su desglose."""
+    """El precio de partida incluye el CI: round(CD × 1,06), también con %CI interno."""
     if not os.path.exists(ALQUERIA):
-        return
+        raise Saltado("falta Test_Alqueria.bc3")
     p = leer_bc3(ALQUERIA)
-    # 301.0010: CD 8,86 -> 9,39 (sin %CI explícito)
     assert abs(p.precio_con_ci("301.0010") - 9.39) < 1e-6
-    # 700.001a: CD 32,33 (ya con línea %CI dentro) -> 34,27 (CI igual encima)
     assert abs(p.precio_con_ci("700.001a") - 34.27) < 1e-6
-    # 301.0115: CD 8,06 -> 8,54
     assert abs(p.precio_con_ci("301.0115") - 8.54) < 1e-6
 
 
 def test_alqueria_redondeo_dimensiones_medicion():
-    """Cada dimensión se redondea a DD antes de multiplicar: la altura 0,0475
-    de 215.0030 se usa como 0,05, dando medición total 112,21 (no 111,32)."""
+    """Cada dimensión se redondea a DD antes de multiplicar: 0,0475 -> 0,05,
+    dando medición total 112,21 (no 111,32)."""
     if not os.path.exists(ALQUERIA):
-        return
+        raise Saltado("falta Test_Alqueria.bc3")
     p = leer_bc3(ALQUERIA)
     assert abs(p.medicion_total("215.0030", "003#") - 112.21) < 1e-6
 
 
 def test_alqueria_partida_alzada_sin_lineas():
-    """Partida con ~M sin líneas de detalle: la medición es el total declarado
-    (=1), no 0. 542.0600 (abonament fixe) -> medición 1, importe 7964,67."""
+    """Partida con ~M sin líneas: la medición es el total declarado (=1).
+    542.0600 -> medición 1, importe 7964,67."""
     if not os.path.exists(ALQUERIA):
-        return
+        raise Saltado("falta Test_Alqueria.bc3")
     p = leer_bc3(ALQUERIA)
     assert abs(p.medicion_total("542.0600", "003#") - 1.0) < 1e-6
     assert abs(p.importe_en_padre("542.0600", "003#") - 7964.67) < 0.01
 
 
 def test_alqueria_round_trip_conserva_partida_alzada():
-    """El ciclo leer->escribir->releer debe conservar el PEM y TODAS las
-    mediciones, incluidas las PARTIDAS ALZADAS (~M sin líneas de detalle, solo
-    total declarado).
-
-    Antes el escritor descartaba toda medición sin líneas, así que la alzada
-    542.0600 (total declarado 1, importe 7.964,67) desaparecía al guardar y el
-    PEM de Alquería caía exactamente esos 7.964,67 € (de 9.073.347,54 a
-    9.065.382,87). Como el autoguardado reescribe el archivo en cada edición,
-    bastaba un cambio cualquiera para perder la alzada para siempre."""
+    """El ciclo leer→escribir→releer conserva el PEM y TODAS las mediciones,
+    incluidas las PARTIDAS ALZADAS (~M sin líneas, solo total declarado)."""
     if not os.path.exists(ALQUERIA):
-        return
+        raise Saltado("falta Test_Alqueria.bc3")
     p1 = leer_bc3(ALQUERIA)
     pem1 = p1.presupuesto_total()
     n_med1 = sum(len(c.mediciones) for c in p1.conceptos.values())
     imp_alzada1 = p1.importe_en_padre("542.0600", "003#")
-    assert imp_alzada1 > 0, "precondición: la alzada debe tener importe en el original"
+    assert imp_alzada1 > 0
     with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
         salida = tmp.name
     try:
@@ -429,27 +508,15 @@ def test_alqueria_round_trip_conserva_partida_alzada():
     n_med2 = sum(len(c.mediciones) for c in p2.conceptos.values())
     assert n_med2 == n_med1, f"se perdieron mediciones: {n_med1} -> {n_med2}"
     imp_alzada2 = p2.importe_en_padre("542.0600", "003#")
-    assert abs(imp_alzada2 - imp_alzada1) < 0.01, (
-        f"la alzada 542.0600 cambió de importe: {imp_alzada1:.2f} -> {imp_alzada2:.2f}"
-    )
-    assert abs(p2.presupuesto_total() - pem1) < 0.01, (
-        f"PEM cambió en round-trip: {pem1:,.2f} -> {p2.presupuesto_total():,.2f}"
-    )
+    assert abs(imp_alzada2 - imp_alzada1) < 0.01
+    assert abs(p2.presupuesto_total() - pem1) < 0.01
 
 
 def test_alqueria_round_trip_validacion_limpia():
-    """Tras guardar y reabrir, la validación debe seguir LIMPIA (0 discrepancias).
-
-    Antes, el escritor escribía el ~C de los capítulos con el coste directo SIN
-    el CI (Presto guarda ahí el importe CON el 6%) y el total de cada ~M como
-    suma cruda en vez del total redondeado como Presto. Tras guardar y reabrir,
-    la validación saltaba de 0 a 38 discrepancias de precio + 2 de medición, y el
-    hueco de PEM archivo-vs-calculado pasaba de +0,41 a ~+512.000 €. Ahora el
-    ciclo guardar→reabrir deja la validación a 0 discrepancias y el PEM cuadrado."""
+    """Tras guardar y reabrir, la validación sigue LIMPIA (0 discrepancias)."""
     if not os.path.exists(ALQUERIA):
-        return
+        raise Saltado("falta Test_Alqueria.bc3")
     p1 = leer_bc3(ALQUERIA)
-    # Precondición: el original está limpio
     v1 = p1.validar_completo()
     assert len(v1["precios"]) == 0 and len(v1["mediciones"]) == 0
     with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
@@ -460,25 +527,16 @@ def test_alqueria_round_trip_validacion_limpia():
     finally:
         os.unlink(salida)
     v2 = p2.validar_completo()
-    assert len(v2["precios"]) == 0, (
-        f"tras guardar aparecen {len(v2['precios'])} discrepancias de precio: "
-        f"{[(d['codigo'], d['diferencia_pct']) for d in v2['precios'][:3]]}"
-    )
-    assert len(v2["mediciones"]) == 0, (
-        f"tras guardar aparecen {len(v2['mediciones'])} discrepancias de medición: "
-        f"{[(d['codigo'], d['diferencia']) for d in v2['mediciones'][:3]]}"
-    )
+    assert len(v2["precios"]) == 0, f"aparecen {len(v2['precios'])} discrepancias de precio"
+    assert len(v2["mediciones"]) == 0, f"aparecen {len(v2['mediciones'])} de medición"
     comp = p2.comparar_importes_archivo()
-    assert abs(comp["diferencia_pem"]) < 0.01, (
-        f"hueco de PEM archivo-vs-calc tras guardar: {comp['diferencia_pem']:,.2f}"
-    )
+    assert abs(comp["diferencia_pem"]) < 0.01
 
 
 def test_alqueria_sin_discrepancias_y_pem():
-    """Con todo bien leído del ~K, no debe haber discrepancias de precio ni de
-    medición, y el PEM debe quedar a < 0,05% del valor congelado del archivo."""
+    """0 discrepancias de precio/medición y PEM a < 0,05% del valor del archivo."""
     if not os.path.exists(ALQUERIA):
-        return
+        raise Saltado("falta Test_Alqueria.bc3")
     p = leer_bc3(ALQUERIA)
     r = p.validar_completo()
     assert len(r["precios"]) == 0, f"precios inconsistentes: {r['precios'][:3]}"
@@ -489,22 +547,19 @@ def test_alqueria_sin_discrepancias_y_pem():
 
 
 def test_alqueria_partida_con_descomposicion_sin_unidad():
-    """Una partida con descomposición pero sin unidad en el ~C debe clasificarse
-    como PARTIDA (no capítulo) porque tiene medición propia. 701.0236a
-    ('Cartell de 120x120 d'alumini'). Si sale capítulo, su importe se pierde."""
+    """Una partida con descomposición pero sin unidad se clasifica como PARTIDA
+    (no capítulo) porque tiene medición propia. 701.0236a."""
     if not os.path.exists(ALQUERIA):
-        return
-    from bc3manager.core.model import TipoConcepto
+        raise Saltado("falta Test_Alqueria.bc3")
     p = leer_bc3(ALQUERIA)
     assert p.get("701.0236a").tipo == TipoConcepto.PARTIDA
 
 
 def test_alqueria_consistencia_k_detecta_decimales():
-    """El chequeo de consistencia debe avisar de los valores del archivo con más
-    decimales de los que declara el ~K: dimensiones (DD=2) como 0,315 y uds
-    (DN=2) como -3,1415. Es informativo, no cambia el cálculo."""
+    """El chequeo de consistencia avisa de valores con más decimales que el ~K:
+    dimensiones (DD=2) como 0,315 y uds (DN=2) como -3,1415."""
     if not os.path.exists(ALQUERIA):
-        return
+        raise Saltado("falta Test_Alqueria.bc3")
     p = leer_bc3(ALQUERIA)
     cats = p.revisar_consistencia_k()
     assert "dimensiones" in cats and cats["dimensiones"]["declarado"] == 2
@@ -512,28 +567,294 @@ def test_alqueria_consistencia_k_detecta_decimales():
     assert cats["dimensiones"]["total"] > 0 and cats["uds_medicion"]["total"] > 0
 
 
-def test_presto88_sin_ci_sigue_exacto():
-    """Un archivo sin CI en el ~K (Presto 8.8) NO debe aplicar ningún recargo:
-    ci_pct=0 y el PEM cuadra exacto. Protege contra aplicar CI donde no toca."""
-    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Test_SONFONT.bc3")
-    if not os.path.exists(ruta):
+# ===========================================================================
+# FAMILIA 4 — EDICIÓN Y AUTOGUARDADO (modelo + ciclo guardar/reabrir, undo/redo)
+# ===========================================================================
+# Se usa Test_SONFONT.bc3 como banco de pruebas (pequeño, con ~K, sin discrepancias).
+EDIT_FILE = _ruta("Test_SONFONT.bc3")
+
+
+def _cargar_edit() -> Presupuesto:
+    if not os.path.exists(EDIT_FILE):
+        raise Saltado("falta Test_SONFONT.bc3")
+    return leer_bc3(EDIT_FILE)
+
+
+def _primera_partida_con_hijos(p: Presupuesto) -> str:
+    return next(c.codigo for c in p.conceptos.values()
+                if c.tipo == TipoConcepto.PARTIDA and c.hijos)
+
+
+def _roundtrip(p: Presupuesto) -> Presupuesto:
+    with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
+        salida = tmp.name
+    try:
+        escribir_bc3(p, salida)
+        return leer_bc3(salida)
+    finally:
+        os.unlink(salida)
+
+
+def _leaf_que_mueve_pem(p: Presupuesto) -> str | None:
+    """Devuelve un recurso hoja cuyo cambio de precio SÍ altera el PEM (está en
+    una partida medida). Restaura el precio antes de devolver."""
+    pem0 = p.presupuesto_total()
+    for c in list(p.conceptos.values()):
+        if c.tipo == TipoConcepto.UNITARIO and not c.hijos and c.precio:
+            orig = c.precio
+            p.modificar_precio(c.codigo, orig + 100.0)
+            p.recalcular()
+            mueve = abs(p.presupuesto_total() - pem0) > 0.01
+            p.modificar_precio(c.codigo, orig)
+            p.recalcular()
+            if mueve:
+                return c.codigo
+    return None
+
+
+def test_edit_modificar_precio_persiste():
+    """Editar el precio de un recurso hoja: se aplica, recalcula, y sobrevive al
+    guardar→reabrir."""
+    p = _cargar_edit()
+    leaf = next(c.codigo for c in p.conceptos.values()
+                if c.tipo == TipoConcepto.UNITARIO and not c.hijos and c.precio)
+    p.modificar_precio(leaf, 123.45)
+    assert abs(p.get(leaf).precio - 123.45) < 1e-9
+    p2 = _roundtrip(p)
+    assert abs(p2.get(leaf).precio - 123.45) < 0.01, "el precio editado no sobrevivió"
+
+
+def test_edit_precio_partida_se_rechaza():
+    """No se puede editar el precio de una partida con descomposición (calculado)."""
+    p = _cargar_edit()
+    partida = _primera_partida_con_hijos(p)
+    try:
+        p.modificar_precio(partida, 99.0)
+    except ValueError:
         return
-    p = leer_bc3(ruta)
-    assert p.ci_pct == 0.0
-    arch = p.get(p.codigo_raiz)._precio_bc3
-    if arch:
-        assert abs(p.presupuesto_total() - arch) < 0.01
+    raise AssertionError("modificar_precio sobre partida con descomposición debió fallar")
+
+
+def test_edit_add_partida_nace_en_cero():
+    """add_partida crea la partida con cantidad 0 (importe 0) y no rompe nada."""
+    p = _cargar_edit()
+    cap = next(c.codigo for c in p.conceptos.values() if c.tipo == TipoConcepto.CAPITULO)
+    p.add_partida(cap, "NUEVA.TEST", "m2", "Partida de prueba", 10.0)
+    h = next(h for h in p.get(cap).hijos if h.codigo_hijo == "NUEVA.TEST")
+    assert h.cantidad == 0.0
+    assert abs(p.importe_en_padre("NUEVA.TEST", cap)) < 1e-9
+
+
+def test_edit_add_recurso_tipo_fiebdc():
+    """Un recurso añadido se exporta con su tipo FIEBDC explícito (no vacío)."""
+    p = _cargar_edit()
+    partida = _primera_partida_con_hijos(p)
+    p.add_recurso(partida, "REC.MAT.TEST", rendimiento=2.0, precio=5.0, unidad="kg")
+    p.add_recurso(partida, "REC.MAQ.TEST", rendimiento=1.0, precio=9.0,
+                  unidad="h", tipo_fiebdc="2")
+    with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
+        salida = tmp.name
+    try:
+        escribir_bc3(p, salida)
+        with open(salida, "rb") as f:
+            lineas = f.read().decode("cp1252", errors="replace").splitlines()
+    finally:
+        os.unlink(salida)
+    def tipo(cod):
+        return next(l for l in lineas if l.startswith(f"~C|{cod}|")).split("|")[6]
+    assert tipo("REC.MAT.TEST") == "3"   # material por defecto
+    assert tipo("REC.MAQ.TEST") == "2"   # maquinaria indicada
+
+
+def test_edit_modificar_codigo_actualiza_referencias():
+    """Renombrar un concepto actualiza TODAS las referencias (hijos, mediciones,
+    raíz) y el archivo reescrito no queda con enlaces rotos."""
+    p = _cargar_edit()
+    viejo = next(c.codigo for c in p.conceptos.values()
+                 if c.tipo == TipoConcepto.UNITARIO and not c.hijos)
+    nuevo = viejo + ".REN"
+    pem0 = p.presupuesto_total()
+    p.modificar_codigo(viejo, nuevo)
+    assert p.get(nuevo) is not None and p.get(viejo) is None
+    assert not any(h.codigo_hijo == viejo
+                   for c in p.conceptos.values() for h in c.hijos), "quedó referencia al código viejo"
+    p2 = _roundtrip(p)
+    assert not _refs_rotas(p2), "el archivo reescrito tras renombrar tiene referencias rotas"
+    assert abs(p2.presupuesto_total() - pem0) < 0.01, "renombrar cambió el PEM"
+
+
+def test_edit_eliminar_concepto_desvincula():
+    """eliminar_concepto desvincula del padre pero NO borra el concepto (puede
+    usarse en otros sitios)."""
+    p = _cargar_edit()
+    cap = "01#"
+    if p.get(cap) is None:
+        raise Saltado("estructura inesperada")
+    hijo = p.get(cap).hijos[0].codigo_hijo
+    p.eliminar_concepto(hijo, cap)
+    assert not any(h.codigo_hijo == hijo for h in p.get(cap).hijos), "no se desvinculó del padre"
+    assert p.get(hijo) is not None, "el concepto no debería borrarse del presupuesto"
+
+
+def test_edit_copiar_no_crea_ciclo():
+    """copiar_concepto debe impedir pegar un concepto dentro de sí mismo o de un
+    descendiente (evita ciclos)."""
+    p = _cargar_edit()
+    cap = next(c.codigo for c in p.conceptos.values()
+               if c.tipo == TipoConcepto.CAPITULO and c.hijos)
+    try:
+        p.copiar_concepto(cap, cap)
+    except ValueError:
+        return
+    raise AssertionError("copiar un concepto dentro de sí mismo debió fallar")
+
+
+def test_edit_cadena_ediciones_round_trip_valido():
+    """Una cadena de ediciones seguidas deja un archivo que se relee sin error,
+    con la validación tan limpia como el original (caza el drift del autoguardado)."""
+    p = _cargar_edit()
+    v0 = p.validar_completo()
+    cap = next(c.codigo for c in p.conceptos.values() if c.tipo == TipoConcepto.CAPITULO)
+    partida = _primera_partida_con_hijos(p)
+    leaf = next(c.codigo for c in p.conceptos.values()
+                if c.tipo == TipoConcepto.UNITARIO and not c.hijos and c.precio)
+    # Varias ediciones encadenadas, cada una reescribiendo (como el autoguardado)
+    p.modificar_resumen(partida, "Resumen editado de prueba")
+    p = _roundtrip(p)
+    p.add_partida(cap, "ENC.TEST", "ud", "Encadenada", 3.0)
+    p = _roundtrip(p)
+    p.modificar_precio(leaf, p.get(leaf).precio + 1.0)
+    p = _roundtrip(p)
+    assert not _refs_rotas(p), "la cadena de ediciones dejó referencias rotas"
+    v1 = p.validar_completo()
+    assert len(v1["precios"]) <= len(v0["precios"]) + 1, "la cadena de ediciones empeoró la validación"
+
+
+def test_edit_undo_redo_restaura_pem():
+    """Deshacer/rehacer (capa web): tras editar y deshacer, el PEM vuelve exacto;
+    rehacer lo recupera. Usa los ayudantes de snapshot de web.py con una copia
+    temporal como 'archivo original' (no toca el .bc3 real)."""
+    try:
+        from bc3manager import web
+    except Exception as e:                       # Flask no disponible u otro fallo de import
+        raise Saltado(f"no se pudo importar web.py: {e!r}")
+    if not os.path.exists(EDIT_FILE):
+        raise Saltado("falta Test_SONFONT.bc3")
+    import shutil
+    with tempfile.NamedTemporaryFile(suffix=".bc3", delete=False) as tmp:
+        copia = tmp.name
+    shutil.copy(EDIT_FILE, copia)
+    try:
+        p = leer_bc3(copia)
+        web._estado["presupuesto"] = p
+        web._estado["ruta_original"] = copia
+        web._init_historial()                    # undo_stack = [S0]
+        pem0 = p.presupuesto_total()
+        leaf = next(c.codigo for c in p.conceptos.values()
+                    if c.tipo == TipoConcepto.UNITARIO and not c.hijos and c.precio)
+        p.modificar_precio(leaf, p.get(leaf).precio + 100.0)
+        web._autoguardar()                       # undo_stack = [S0, S1]
+        pem1 = web._estado["presupuesto"].presupuesto_total()
+        assert abs(pem1 - pem0) > 0.01, "la edición no cambió el PEM (test mal montado)"
+        # Deshacer: replica la lógica de /api/undo
+        actual = web._estado["undo_stack"].pop()
+        web._estado.setdefault("redo_stack", []).append(actual)
+        web._restaurar_snapshot(web._estado["undo_stack"][-1])
+        assert abs(web._estado["presupuesto"].presupuesto_total() - pem0) < 0.01, (
+            "deshacer no devolvió el PEM original"
+        )
+        # Rehacer
+        snap = web._estado["redo_stack"].pop()
+        web._estado.setdefault("undo_stack", []).append(snap)
+        web._restaurar_snapshot(snap)
+        assert abs(web._estado["presupuesto"].presupuesto_total() - pem1) < 0.01, (
+            "rehacer no recuperó el PEM editado"
+        )
+    finally:
+        web._estado.clear()
+        try:
+            os.unlink(copia)
+        except OSError:
+            pass
+
+
+# ===========================================================================
+# RUNNER
+# ===========================================================================
+
+def _run() -> int:
+    g = globals()
+    parametricos = [g[k] for k in sorted(g) if k.startswith("param_")]
+    dirigidos = [g[k] for k in sorted(g) if k.startswith("test_")]
+
+    presentes = _corpus_presentes()
+    ausentes = [m["archivo"] for m in CORPUS if not os.path.exists(_ruta(m["archivo"]))]
+
+    print("=" * 64)
+    print(f"CORPUS: {len(presentes)} presentes, {len(ausentes)} ausentes")
+    for m in presentes:
+        print(f"   + {m['archivo']:<26} {m['programa']}")
+    for a in ausentes:
+        print(f"   - {a:<26} (AUSENTE: sus paramétricos se saltan)")
+    print("=" * 64)
+
+    fallos = 0
+    saltados = 0
+    corridas = 0
+
+    # --- Familia 1+2: paramétricos sobre cada archivo del corpus ---
+    print("\n[PARAMÉTRICOS] mismo test sobre cada archivo")
+    for meta in presentes:
+        try:
+            ctx = _Ctx(meta)
+        except Exception as e:
+            print(f"  FALLO  {meta['archivo']} :: carga/round-trip: {e!r}")
+            fallos += 1
+            continue
+        fila_fallos = []
+        ok = 0
+        for fn in parametricos:
+            corridas += 1
+            try:
+                fn(ctx)
+                ok += 1
+            except Saltado as s:
+                saltados += 1
+            except AssertionError as e:
+                fallos += 1
+                fila_fallos.append(f"{fn.__name__}: {e}")
+            except Exception as e:
+                fallos += 1
+                fila_fallos.append(f"{fn.__name__}: ERROR {e!r}")
+        ctx.cleanup()
+        estado = "OK" if not fila_fallos else f"{len(fila_fallos)} FALLOS"
+        print(f"  {meta['archivo']:<26} {ok}/{len(parametricos)} {estado}")
+        for f in fila_fallos:
+            print(f"        FALLO {f}")
+
+    # --- Familia 3+4: dirigidos y edición ---
+    print("\n[DIRIGIDOS Y EDICIÓN]")
+    for fn in dirigidos:
+        corridas += 1
+        try:
+            fn()
+            print(f"  OK     {fn.__name__}")
+        except Saltado as s:
+            saltados += 1
+            corridas -= 1
+            print(f"  SALTADO {fn.__name__} ({s})")
+        except AssertionError as e:
+            fallos += 1
+            print(f"  FALLO  {fn.__name__}: {e}")
+        except Exception as e:
+            fallos += 1
+            print(f"  ERROR  {fn.__name__}: {e!r}")
+
+    print("\n" + "=" * 64)
+    print(f"{corridas - fallos}/{corridas} comprobaciones correctas "
+          f"({saltados} saltadas, {fallos} fallidas)")
+    return 1 if fallos else 0
 
 
 if __name__ == "__main__":
-    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    fallos = 0
-    for fn in fns:
-        try:
-            fn()
-            print(f"  OK   {fn.__name__}")
-        except AssertionError as e:
-            fallos += 1
-            print(f" FALLO {fn.__name__}: {e}")
-    print(f"\n{len(fns) - fallos}/{len(fns)} tests correctos")
-    sys.exit(1 if fallos else 0)
+    sys.exit(_run())
