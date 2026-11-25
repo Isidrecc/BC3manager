@@ -5,6 +5,32 @@ y las reglas que NO hay que romper, ver `CLAUDE.md` (invariantes 5-7).
 
 ---
 
+## 2026-11 — Importar presupuestos desde el PDF de Presto (feat)
+
+Nuevo módulo `bc3manager/io/importar_pdf.py` y subcomando de la CLI
+`importar-pdf`: lee el documento "Presupuesto" impreso por Presto (también si se
+ha pasado por Word) y genera el BC3 más una **tabla de control en Excel**.
+
+- Lee las cinco secciones: mediciones (con sus líneas), cuadros de precios nº1
+  (cifra y letra) y nº2 (coste directo y CI), presupuesto (árbol de hasta seis
+  niveles: capítulo … elemento) y resumen (PEM, GG, BI, IVA).
+- La fuente es la sección PRESUPUESTO; el resto se usa para **cruzar** datos.
+  Toda discrepancia queda en la hoja "Avisos" (ERROR si afecta a importes, AVISO
+  si es solo texto), nunca se corrige en silencio.
+- Detecta si el precio lleva los costes indirectos comparando con el cuadro nº2.
+  Dos modos: `--ci incluido` (precio con CI y CI=0 en el `~K`, por defecto) y
+  `--ci separado` (coste directo y el % de CI en el `~K`).
+- Verificación de ida y vuelta: escribe el BC3, lo relee con el lector de
+  BC3Manager y comprueba partida a partida, capítulo a capítulo y el PEM.
+- Un capítulo repetido con el mismo código y contenido se escribe como un único
+  concepto colgado de los dos sitios (como en Presto).
+- Dependencias opcionales nuevas: `pip install pdfplumber openpyxl`
+  (grupo `importar-pdf` en `pyproject.toml`).
+- Tests nuevos `test_importar_pdf_*`; el de un PDF real solo corre si se define
+  la variable `BC3_PDF_PRUEBA` (los PDF de obra no se suben al repositorio).
+
+---
+
 ## 2026-06 — Batería de tests paramétrica sobre archivos reales (test)
 
 Se implementa el diseño de `docs/auditoria/bateria-tests.md`. `tests/test_basico.py`

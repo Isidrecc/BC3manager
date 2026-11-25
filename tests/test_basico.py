@@ -782,6 +782,153 @@ def test_edit_undo_redo_restaura_pem():
 # RUNNER
 # ===========================================================================
 
+# =========================================================================
+# IMPORTACIÓN DESDE PDF DE PRESTO (bc3manager/io/importar_pdf.py)
+# Las funciones de interpretación se prueban sin PDF. La prueba completa con
+# un PDF real solo corre si se indica en la variable BC3_PDF_PRUEBA (los PDF
+# de obra no se suben al repositorio).
+# =========================================================================
+
+def test_importar_pdf_numeros_y_letras():
+    from decimal import Decimal
+    from bc3manager.io.importar_pdf import es_numero, a_decimal, cantidad_en_letra
+    assert es_numero("3.078.115,96") and es_numero("32") and es_numero("0,45")
+    assert not es_numero("01.01") and not es_numero("6,00%") and not es_numero("0.6/1kV")
+    assert a_decimal("3.078.115,96") == Decimal("3078115.96")
+    casos = {
+        "VEINTITRES EUROS con OCHENTA Y CUATRO CÉNTIMOS": "23.84",
+        "MIL DOSCIENTOS CINCUENTA Y DOS EUROS con CINCUENTA Y CUATRO CÉNTIMOS": "1252.54",
+        "DOS MIL TRESCIENTOS TREINTA Y CINCO EUROS con OCHO CÉNTIMOS": "2335.08",
+        "CUATRO MILLONES CUATROCIENTOS TREINTA Y DOS MIL CIENTO SETENTA Y NUEVE "
+        "EUROS con DIECISIETE CÉNTIMOS": "4432179.17",
+        "CIEN EUROS": "100",
+        "VEINTIÚN EUROS con UN CÉNTIMO": "21.01",
+    }
+    for texto, esperado in casos.items():
+        assert cantidad_en_letra(texto) == Decimal(esperado), (texto, cantidad_en_letra(texto))
+    assert cantidad_en_letra("PALABRA RARA EUROS") is None
+
+
+def test_importar_pdf_unir_lineas_silabas():
+    from bc3manager.io.importar_pdf import unir_lineas, normaliza
+    assert unir_lineas(["medidas de se-", "guridad necesarias"]) == "medidas de seguridad necesarias"
+    assert unir_lineas(["según UNE-", "EN 1338"]) == "según UNE-EN 1338"
+    assert unir_lineas(["CUATRO EU-", "ROS"], guion_mayusculas=True) == "CUATRO EUROS"
+    # Mismo texto partido por anchos distintos: se considera igual
+    assert normaliza("instruccio- nes de la") == normaliza("instrucciones de  la")
+
+
+def _datos_pdf_sinteticos():
+    """Presupuesto mínimo como lo dejaría el lector del PDF: dos capítulos, un
+    subcapítulo repetido con el mismo contenido en dos sitios, precios con CI
+    del 6 % y una partida alzada."""
+    from decimal import Decimal as D
+    from bc3manager.io.importar_pdf import (
+        Capitulo, DatosPDF, LineaMed, MedicionPDF, Ocurrencia, PrecioC1, PrecioC2,
+        ResumenPDF)
+    oc = []
+
+    def partida(padre, ruta, codigo, cant, cd, texto="Texto de la partida"):
+        precio = (cd * D("1.06")).quantize(D("0.01"))
+        o = Ocurrencia(codigo, "m", f"Resumen {codigo}", texto, 1, padre, 0, ruta,
+                       cant, precio, (cant * precio).quantize(D("0.01")))
+        oc.append(o)
+        return o
+
+    sub = Capitulo("02.01", "SUBCAPITULO", "DOCUMENTACIÓN", 1)
+    sub.hijos = [partida("02.01", "02 / 02.01", "DOC", D("1"), D("100"))]
+    sub.total_pdf = sub.hijos[0].importe
+    sub2 = Capitulo("02.01", "SUBCAPITULO", "DOCUMENTACIÓN", 1)
+    sub2.hijos = [Ocurrencia("DOC", "m", "Resumen DOC", "Texto de la partida", 1, "02.01", 0,
+                             "02 / 02.02 / 02.01", D("1"), sub.hijos[0].precio,
+                             sub.hijos[0].importe)]
+    sub2.total_pdf = sub.total_pdf
+    oc.append(sub2.hijos[0])
+    sub22 = Capitulo("02.02", "SUBCAPITULO", "VARIOS", 1, hijos=[sub2],
+                     total_pdf=sub2.total_pdf)
+    c1 = Capitulo("01", "CAPITULO", "TRABAJOS", 1)
+    c1.hijos = [partida("01", "01", "A1", D("12.50"), D("10.33")),
+                partida("01", "01", "A2", D("1"), D("500"))]
+    c1.total_pdf = sum(o.importe for o in c1.hijos)
+    c2 = Capitulo("02", "CAPITULO", "OTROS", 1, hijos=[sub, sub22])
+    c2.total_pdf = sub.total_pdf + sub22.total_pdf
+    raiz = Capitulo("", "OBRA", "", 0, hijos=[c1, c2])
+    meds = [
+        MedicionPDF("A1", "m", "Resumen A1", "Texto de la partida", 1, "01", 0,
+                    [LineaMed("Tramo 1", D("2"), D("5.00"), None, None, D("10.00")),
+                     LineaMed("Tramo 2", D("1"), D("2.50"), None, None, D("2.50"))], D("12.50")),
+        MedicionPDF("A2", "m", "Resumen A2", "Texto de la partida", 1, "01", 0, [], D("1")),
+        MedicionPDF("DOC", "m", "Resumen DOC", "Texto de la partida", 1, "02.01", 0,
+                    [LineaMed("", D("1"), None, None, None, D("1.00"))], D("1")),
+    ]
+    c1d = {o.codigo: [PrecioC1(o.codigo, "m", o.resumen, o.texto, 1, o.precio)] for o in oc}
+    c2d = {}
+    for o in oc:
+        cd = (o.precio / D("1.06")).quantize(D("0.01"))
+        c2d[o.codigo] = [PrecioC2(o.codigo, "m", o.resumen, o.texto, 1, [], cd, D("6.00"),
+                                  o.precio - cd, o.precio)]
+    pem = c1.total_pdf + c2.total_pdf
+    resumen = ResumenPDF([("01", "TRABAJOS", c1.total_pdf), ("02", "OTROS", c2.total_pdf)],
+                         pem, D("13"), None, D("6"), None, None, D("21"))
+    return DatosPDF("OBRA DE PRUEBA", raiz, oc, pem, meds, c1d, c2d, resumen, [], {})
+
+
+def test_importar_pdf_construye_y_cuadra():
+    from bc3manager.io.importar_pdf import construir_presupuesto, verificar_bc3
+    datos = _datos_pdf_sinteticos()
+    for modo in ("incluido", "separado"):
+        p, control = construir_presupuesto(datos, modo_ci=modo)
+        assert control.pem_bc3 == datos.pem_pdf, (modo, control.pem_bc3, datos.pem_pdf)
+        assert control.cuenta("ERROR") == 0, [a.detalle for a in control.avisos
+                                             if a.gravedad == "ERROR"]
+        assert "INCLUYE" in control.ci_conclusion
+        # Capítulo repetido con el mismo contenido: un único concepto compartido
+        assert p.get("02.01#") is not None and p.get("02.01-2#") is None
+        assert sum(1 for c in p.conceptos.values()
+                   for h in c.hijos if h.codigo_hijo == "02.01#") == 2
+        # Líneas de medición conservadas; partida alzada solo con total
+        assert len(p.get("A1").mediciones["01#"].lineas) == 2
+        assert p.get("A2").mediciones["01#"].lineas == []
+        if modo == "separado":
+            assert abs(p.ci_pct - 0.06) < 1e-12 and p.get("A1").precio == 10.33
+        ruta = tempfile.mktemp(suffix=".bc3")
+        try:
+            escribir_bc3(p, ruta)
+            verificar_bc3(ruta, control)
+        finally:
+            if os.path.exists(ruta):
+                os.remove(ruta)
+        assert control.pem_bc3_releido == datos.pem_pdf, (modo, control.pem_bc3_releido)
+        assert control.cuenta("ERROR") == 0
+
+
+def test_importar_pdf_detecta_discrepancias():
+    from decimal import Decimal as D
+    from bc3manager.io.importar_pdf import construir_presupuesto
+    datos = _datos_pdf_sinteticos()
+    datos.cuadro1["A1"][0].precio = D("99.99")          # precio del cuadro nº1 distinto
+    datos.mediciones[0].total = D("13.00")              # medición distinta
+    datos.cuadro2["A2"][0].texto = "Otro texto"         # descripción distinta
+    _, control = construir_presupuesto(datos)
+    tipos = {(a.gravedad, a.tipo, a.codigo) for a in control.avisos}
+    assert ("ERROR", "Precio cuadro nº1", "A1") in tipos
+    assert ("ERROR", "Medición", "A1") in tipos
+    assert ("AVISO", "Descripción distinta", "A2") in tipos
+
+
+def test_importar_pdf_real_si_existe():
+    ruta = os.environ.get("BC3_PDF_PRUEBA", "")
+    if not ruta or not os.path.exists(ruta):
+        raise Saltado("define BC3_PDF_PRUEBA con la ruta de un PDF de presupuesto de Presto")
+    from bc3manager.io.importar_pdf import importar_pdf
+    control = importar_pdf(ruta)
+    assert control.pem_pdf is not None
+    assert control.pem_bc3 == control.pem_pdf, (control.pem_bc3, control.pem_pdf)
+    assert control.pem_bc3_releido == control.pem_pdf
+    assert control.cuenta("ERROR") == 0, [a.detalle for a in control.avisos
+                                         if a.gravedad == "ERROR"][:5]
+
+
 def _run() -> int:
     g = globals()
     parametricos = [g[k] for k in sorted(g) if k.startswith("param_")]

@@ -34,6 +34,8 @@
 | 17  | Celdas que cortan el contenido y no se pueden redimensionar             | 🔵 UI    | ⬜ Pendiente            |
 | 18  | El título de algunas partidas no se muestra ("—"), intermitente         | 🔵 UI    | ⬜ Pendiente            |
 | 19  | El escritor siempre añade un `~K` (re-redondea archivos sin `~K`)        | 🟠 MEDIA | ⬜ Pendiente            |
+| 20  | Presto no reconoce las líneas de medición de los archivos guardados      | 🔴 ALTA  | ⬜ Pendiente            |
+| 21  | Presto convierte partidas en materiales al incorporarlas                 | 🔴 ALTA  | ⬜ Pendiente (sospecha) |
 
 Leyenda: ✅ resuelto · ⬜ pendiente · 🔴 alta · 🟠 media · 🟡 baja · 🔵 interfaz/usabilidad.
 
@@ -61,6 +63,23 @@ Leyenda: ✅ resuelto · ⬜ pendiente · 🔴 alta · 🟠 media · 🟡 baja �
 - **Dónde:** `io/lector.py::_detectar_costes_indirectos` — si el `~K` no declara CI pero existe un concepto cuyo código empieza por `%CI`, toma su precio como `ci_pct` global.
 - **El riesgo:** si ese mismo concepto `%CI` aparece además como línea dentro de las descomposiciones (que es lo habitual), su coste ya se suma en el coste directo de cada partida (`recalcular` lo trata como línea de porcentaje)… y encima `precio_con_ci` aplica el `ci_pct` global otra vez. La norma (p.9) advierte expresamente de no aplicar dos veces el CI por esta dualidad `~K`/descomposición.
 - **Estado:** ningún archivo de los tests activa esta vía (Alquería trae el CI en el `~K`; Presto 8.8 no tiene nada). Hace falta un archivo real que declare el CI solo como concepto `%CI` para confirmar o descartar.
+
+### 20. Presto no reconoce las líneas de medición de los archivos guardados — VERIFICADO
+
+- **Síntoma (visto por el usuario en Presto 8.8, 2026-10-15):** al abrir un `.bc3` escrito por BC3Manager, algunas partidas muestran la cantidad (CanPres) en negro, como valor fijo, y no la enlazan con sus líneas de medición, aunque las líneas están. Hay que copiar las líneas y volver a pegarlas para que Presto las tenga en cuenta.
+- **Causa:** en el `~D` de cada capítulo, el escritor pone a todas sus partidas **rendimiento 1** (`~D|02#|MOV.EXC.010\1\1\...`), mientras que el `~M` de esa misma partida declara la medición real (`~M|02#\MOV.EXC.010|2\5\|1914.696|...`). La norma (p.21) exige que *"MEDICION_TOTAL debe coincidir con el rendimiento del registro tipo '~D' correspondiente"*, y Presto escribe así sus propios archivos: en su exportación, el `~D` del capítulo lleva la cantidad (`~D|01#|PRE.TOP.010\1\3696.81\...`). Con los dos datos en desacuerdo, Presto se queda con la cantidad grabada y no con las líneas.
+- **Dónde:** `io/escritor.py::_reg_D` escribe el rendimiento que tenga el modelo, y para los hijos de un capítulo el modelo guarda 1 (las cantidades viven en `Concepto.mediciones`). Los scripts que generan presupuestos desde cero (p.ej. `PROYECTOS/gen_pluvials_c_vent.py` y el de los colectores de Santanyí) también crean esas líneas con `Hijo(rendimiento=1)`.
+- **Arreglo propuesto:** al escribir el `~D` de un capítulo, poner como rendimiento de cada partida el total de su medición en ese capítulo (el mismo valor redondeado que se escribe en el `~M`). Comprobar con un ciclo escribir→abrir en Presto 8.8.
+- **Hallado:** 2026-10-15, presupuesto de los colectores de Santanyí (`PROYECTOS/Colectores Santanyi.bc3`).
+
+### 21. Presto convierte partidas en materiales al incorporarlas — SOSPECHA
+
+- **Síntoma (visto por el usuario en Presto 8.8):** partidas generadas con BC3Manager aparecen en Presto con naturaleza **material** y hay que volver a cambiarlas a partida a mano. Ocurre cada vez que se incorporan.
+- **Lo comprobado:** en los archivos que escribe BC3Manager, **todas** las partidas llevan tipo 0 (sin clasificar) en el campo 6 del `~C`; ninguna lleva 3. Revisados `Colectores Santanyi.bc3` (29 partidas), `Santanyi - partidas nuevas.bc3` (11) y `Colectores Santanyi v4.bc3` (41). En cambio, en `Colectores Santanyi v2.bc3`, exportado por Presto tras abrir el primero, las **13 partidas del capítulo 03 Hidráulica** (tuberías, válvulas, ventosa, te y tapones) salen con tipo 3, y además con la medición reducida a 1: el capítulo pasó de unos 398.000 € a 4.091,26 €. Las partidas de los demás capítulos, escritas exactamente igual, siguieron como partida. La conversión ocurre dentro de Presto, no en el archivo.
+- **Por qué es grave:** al convertirse en material, la partida pierde la medición sin aviso y el importe del capítulo se hunde.
+- **Hipótesis por descartar:** (a) el camino por el que entran en Presto (abrir el archivo, importarlo como base de datos y arrastrar, o copiar y pegar entre obras); (b) la cabecera `~V` FIEBDC-3/2024, cuando Presto 8.8 exporta FIEBDC-3/2002; (c) el tipo de información del `~V`, que el programa escribe al revés que la norma (nº 10); (d) las líneas de referencia con tipo 4 dentro del descompuesto (ver nº 13: en la norma 2024 el tipo 4 es "componentes adicionales de residuo"). El formato no tiene código para "partida": una partida es un concepto de tipo 0 con descompuesto, y con tipo 0 cada programa decide.
+- **Siguiente paso:** preparar un `.bc3` de prueba con la misma partida escrita de varias formas (cabecera 2002/2024, con y sin referencias, tipo de información 1/2) y pasarlo por Presto por el mismo camino que se usa en el trabajo real. Sirve también para cerrar la prueba pendiente de la naturaleza "Otro" de las líneas de referencia (`PROYECTOS/TEST tipos referencia.bc3`).
+- **Hallado:** 2026-10-15, presupuesto de los colectores de Santanyí.
 
 ## Gravedad MEDIA — desviaciones de la norma con efecto en casos concretos
 

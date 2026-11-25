@@ -9,14 +9,14 @@ Formato de texto plano. Cada registro empieza por `~` + una letra; los campos va
 
 ### Registros que BC3Manager lee (el resto se ignora)
 
-| Registro | Qué es | Notas |
-|----------|--------|-------|
-| `~V` | Propiedad y versión | Versión del formato, programa emisor, juego de caracteres. |
-| `~K` | Coeficientes y redondeos | Ver detalle abajo. **Nunca se hardcodea nada: todo sale de aquí.** |
-| `~C` | Concepto | `~C|CODIGO|UNIDAD|RESUMEN|PRECIO|FECHA|TIPO|` |
-| `~D` | Descomposición | `~D|PADRE|HIJO\FACTOR\RENDIMIENTO\HIJO2\...|` |
-| `~T` | Texto largo | Descripción/pliego de un concepto. |
-| `~M` | Mediciones | `~M|PADRE\HIJO|...|TOTAL|TIPO\COMENTARIO\N\LARGO\ANCHO\ALTO\...|` |
+| Registro | Qué es                   | Notas                                                              |            |                                   |         |                                        |       |      |     |
+| -------- | ------------------------ | ------------------------------------------------------------------ | ---------- | --------------------------------- | ------- | -------------------------------------- | ----- | ---- | --- |
+| `~V`     | Propiedad y versión      | Versión del formato, programa emisor, juego de caracteres.         |            |                                   |         |                                        |       |      |     |
+| `~K`     | Coeficientes y redondeos | Ver detalle abajo. **Nunca se hardcodea nada: todo sale de aquí.** |            |                                   |         |                                        |       |      |     |
+| `~C`     | Concepto                 | `~C                                                                | CODIGO     | UNIDAD                            | RESUMEN | PRECIO                                 | FECHA | TIPO | `   |
+| `~D`     | Descomposición           | `~D                                                                | PADRE      | HIJO\FACTOR\RENDIMIENTO\HIJO2\... | `       |                                        |       |      |     |
+| `~T`     | Texto largo              | Descripción/pliego de un concepto.                                 |            |                                   |         |                                        |       |      |     |
+| `~M`     | Mediciones               | `~M                                                                | PADRE\HIJO | ...                               | TOTAL   | TIPO\COMENTARIO\N\LARGO\ANCHO\ALTO\... | `     |      |     |
 
 ### No soportado (se ignora al leer y no se escribe)
 
@@ -29,17 +29,17 @@ Tiene 3 campos. La norma FIEBDC-2016 obliga a leer el **campo 3** (el completo y
 - **Campo 2** → coeficientes `CI \ GG \ BI \ BAJA \ IVA` (en %). Solo el **CI** (costes indirectos) afecta al PEM; GG/BI/IVA se guardan para cálculos futuros (PEC, IVA) pero no intervienen aún.
 - **Campo 3** → todos los decimales del cálculo: `DRC DC DFS DRS DUO DI DES DN DD DS DSP DEC` (ojo: el patrón tiene 2 huecos vacíos). Los que usa el cálculo:
 
-| Sigla | En el código | Qué redondea |
-|-------|--------------|--------------|
-| DN | `dec_num` | nº de partes iguales (uds) de una línea de medición |
-| DD | `dec_dim` | dimensiones (largo/ancho/alto) de una línea |
-| DSP | `dec_parcial` | parcial de cada línea de medición |
-| DS | `dec_cantmed` | total de la medición |
-| DRC | `dec_cantrend` | cantidades/rendimientos (incl. el % implícito de líneas `%`) |
-| DI | `dec_subtotal` | subtotales de la descomposición |
-| DUO | `dec_precio_partida` | precio de partida (también el CI: `round(CD×(1+CI), DecPar)`) |
-| DC | `dec_precio_capitulo` | precio de capítulo |
-| DES | `dec_natural` | precios de conceptos básicos (MO, maquinaria, material) |
+| Sigla | En el código          | Qué redondea                                                  |
+| ----- | --------------------- | ------------------------------------------------------------- |
+| DN    | `dec_num`             | nº de partes iguales (uds) de una línea de medición           |
+| DD    | `dec_dim`             | dimensiones (largo/ancho/alto) de una línea                   |
+| DSP   | `dec_parcial`         | parcial de cada línea de medición                             |
+| DS    | `dec_cantmed`         | total de la medición                                          |
+| DRC   | `dec_cantrend`        | cantidades/rendimientos (incl. el % implícito de líneas `%`)  |
+| DI    | `dec_subtotal`        | subtotales de la descomposición                               |
+| DUO   | `dec_precio_partida`  | precio de partida (también el CI: `round(CD×(1+CI), DecPar)`) |
+| DC    | `dec_precio_capitulo` | precio de capítulo                                            |
+| DES   | `dec_natural`         | precios de conceptos básicos (MO, maquinaria, material)       |
 
 Si el archivo **no trae `~K`**, `redondeo_activo=False` y se calcula a precisión alta (presupuestos sintéticos sin `~K` no se ven afectados).
 

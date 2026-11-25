@@ -32,6 +32,11 @@ env/
 .claude/
 
 # --- Datos de obra reales (no compartir presupuestos de clientes) ---
+# La carpeta de proyectos reales entera (BC3, memorias Word, scripts de obra).
+PROYECTOS/
+# La base de precios propia: proyecto aparte, con BC3 de obras de clientes y
+# documentación que los nombra. El repositorio es público.
+BASE DE PRECIOS/
 # Se permite el ejemplo de demostración; el resto de .bc3 se ignora.
 *.bc3
 !ejemplo_son_font.bc3

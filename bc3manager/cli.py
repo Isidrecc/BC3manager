@@ -6,6 +6,7 @@ Uso:
   python -m bc3manager.cli arbol      archivo.bc3
   python -m bc3manager.cli informe    archivo.bc3 --tipo presupuesto --salida informe.html
   python -m bc3manager.cli exportar   archivo.bc3 --salida copia.bc3
+  python -m bc3manager.cli importar-pdf presupuesto.pdf [--salida obra.bc3] [--ci incluido|separado]
 
 Tipos de informe: mediciones | cuadro | presupuesto | resumen
 """
@@ -78,6 +79,27 @@ def cmd_exportar(args) -> None:
     print(f"PEM total conservado: {_fmt_eur(p.presupuesto_total())}")
 
 
+def cmd_importar_pdf(args) -> None:
+    from bc3manager.io.importar_pdf import importar_pdf
+    pdf = Path(args.archivo)
+    if not pdf.exists():
+        raise FileNotFoundError(args.archivo)
+    salida = None if args.solo_control else Path(args.salida or pdf.with_suffix(".bc3"))
+    control_xlsx = Path(args.control or pdf.with_name(pdf.stem + "_control.xlsx"))
+    print(f"Leyendo {pdf.name} (puede tardar unos segundos por cada 100 páginas)...")
+    control = importar_pdf(str(pdf), str(salida) if salida else None,
+                           str(control_xlsx), modo_ci=args.ci)
+    for concepto, valor, comentario in control.globales:
+        extra = f"  [{comentario}]" if comentario in ("OK", "NO CUADRA") else ""
+        print(f"  {concepto:<46} {valor}{extra}")
+    print(f"  CI: {control.ci_conclusion}")
+    print(f"Avisos: {control.cuenta('ERROR')} errores, {control.cuenta('AVISO')} avisos, "
+          f"{control.cuenta('INFO')} informativos")
+    if salida:
+        print(f"BC3 escrito en:       {salida.resolve()}")
+    print(f"Tabla de control en:  {control_xlsx.resolve()}")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="bc3manager",
@@ -104,6 +126,19 @@ def main(argv=None) -> int:
     pe.add_argument("archivo")
     pe.add_argument("--salida", required=True)
     pe.set_defaults(func=cmd_exportar)
+
+    pp = sub.add_parser(
+        "importar-pdf",
+        help="Convierte el PDF de presupuesto de Presto en BC3 + tabla de control")
+    pp.add_argument("archivo", help="PDF con mediciones, cuadros de precios y presupuesto")
+    pp.add_argument("--salida", help="Ruta del BC3 (por defecto, junto al PDF)")
+    pp.add_argument("--control", help="Ruta del Excel de control (por defecto, junto al PDF)")
+    pp.add_argument("--ci", choices=["incluido", "separado"], default="incluido",
+                    help="incluido: precio con CI y CI=0 en el ~K (por defecto). "
+                         "separado: coste directo y el %% de CI en el ~K")
+    pp.add_argument("--solo-control", action="store_true",
+                    help="No escribe el BC3; solo la tabla de control")
+    pp.set_defaults(func=cmd_importar_pdf)
 
     args = parser.parse_args(argv)
     try:

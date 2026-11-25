@@ -12,6 +12,8 @@ dependencies = ["flask>=3.0"]
 [project.optional-dependencies]
 # Para exportar informes a PDF de forma automática (opcional)
 pdf = ["weasyprint"]
+# Para importar presupuestos desde el PDF de Presto (subcomando importar-pdf)
+importar-pdf = ["pdfplumber>=0.11", "openpyxl>=3.1"]
 
 [project.scripts]
 bc3manager = "bc3manager.cli:main"
